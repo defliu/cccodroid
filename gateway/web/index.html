@@ -410,6 +410,7 @@
           <button data-cat="run"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg><span data-i18n>后台与并行</span><svg viewBox="0 0 24 24" class="chev"><path d="M9 6l6 6-6 6"/></svg></button>
           <button data-cat="storage"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg><span data-i18n>存储</span><svg viewBox="0 0 24 24" class="chev"><path d="M9 6l6 6-6 6"/></svg></button>
           <button data-cat="device"><svg viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg><span data-i18n>设备与权限</span><svg viewBox="0 0 24 24" class="chev"><path d="M9 6l6 6-6 6"/></svg></button>
+          <button data-cat="remote"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="13" height="10" rx="2"/><rect x="15.5" y="9" width="6" height="11" rx="1.6"/><path d="M5.5 18h7"/></svg><span data-i18n>远程控制</span><svg viewBox="0 0 24 24" class="chev"><path d="M9 6l6 6-6 6"/></svg></button>
           <button data-cat="update"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg><span data-i18n>更新</span><svg viewBox="0 0 24 24" class="chev"><path d="M9 6l6 6-6 6"/></svg></button>
           <button data-cat="usage"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg><span data-i18n>用量与耗电</span><svg viewBox="0 0 24 24" class="chev"><path d="M9 6l6 6-6 6"/></svg></button>
           <button data-cat="trouble"><svg viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.5-.5-.5-2.5z"/></svg><span data-i18n>排障</span><svg viewBox="0 0 24 24" class="chev"><path d="M9 6l6 6-6 6"/></svg></button>
@@ -882,7 +883,42 @@
             <pre id="cli-out" class="mono hidden"></pre>
           </div>
         </div>
-  
+
+        <!-- ── 远程控制（0.7.8）：网关主动出站连中继，另一台设备凭配对码接入（gw/remote.mjs、remote/）。逻辑在 app/10c-remote.js ── -->
+        <div class="set-cat hidden" data-cat="remote">
+          <h3 class="set-h" data-i18n>远程控制</h3>
+          <div class="srow">
+            <div class="sl"><b data-i18n>启用远程控制</b><p data-i18n>网关主动连出到中继，端到端加密；关掉立即断开，配对码保留</p></div>
+            <div class="sc"><input type="checkbox" class="sw" id="rm-on"></div>
+          </div>
+          <div class="sblock hidden" id="rm-block">
+            <div class="srow head"><div class="sl"><b data-i18n>配对链接</b></div></div>
+            <div class="prov-state" id="rm-state"></div>
+            <div class="rm-link">
+              <input id="rm-link" class="mono" readonly autocomplete="off" spellcheck="false" />
+              <button class="btn sm" id="rm-copy" data-i18n>复制</button>
+              <button class="btn sm ghost" id="rm-open" data-i18n>打开</button>
+            </div>
+            <div class="tiny" data-i18n>在另一台设备（电脑浏览器或另一台手机）打开这个链接，就能看到会话、发消息、停止任务。链接里带着配对码，别发给别人。</div>
+            <div class="srow">
+              <div class="sl"><b data-i18n>房间</b></div>
+              <div class="sc mono" id="rm-room">—</div>
+            </div>
+            <div class="srow">
+              <div class="sl"><b data-i18n>配对码</b></div>
+              <div class="sc mono" id="rm-code">—</div>
+            </div>
+            <div class="srow">
+              <div class="sl"><b data-i18n>中继</b></div>
+              <div class="sc mono" id="rm-relay">—</div>
+            </div>
+            <div class="row-actions">
+              <button class="btn sm ghost" id="rm-reset" data-i18n>重新生成配对码</button>
+            </div>
+            <div class="tiny" data-i18n>配对码就是远程控制凭证：换设备或怀疑泄露时重新生成，旧设备会立刻连不上。中继只看得到密文，看不到配对码和消息内容。</div>
+          </div>
+        </div>
+
         </div>
       </div>
     </section>

@@ -15,6 +15,11 @@ const TD = new TextDecoder();
 const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Crockford-ish, no 0/1/I/O
 export const CODE_LEN = 26;
 
+// 中继单帧上限 256 KB（remote/relay/server.mjs 的 MAX_FRAME），超了直接 1009 断开连接。
+// 密文以 base64url 装进 JSON 后约膨胀 4/3，所以明文载荷超过这个字节数就别发：发送前先挡，给用户一句人话。
+export const MAX_PLAIN_BYTES = 180_000;
+export const plainBytes = (text) => TE.encode(String(text)).length;
+
 export const b64url = (bytes) => {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let s = "";

@@ -10,7 +10,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { CFG, LIVE, log } from "./config.mjs";
 import { onPublish } from "./bus.mjs";
-import { enqueue, snapshot, abortRun } from "./queue.mjs";
+import { enqueue, precheckChat, snapshot, abortRun } from "./queue.mjs";
 import { runList } from "./runs.mjs";
 import { listSessions } from "./sessions.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
@@ -19,8 +19,6 @@ import * as P from "./remote-protocol.mjs";
 
 const STATE_FILE = path.join(CFG.home, "ccapp-remote.json");
 const DEFAULT_RELAY = process.env.CCAPP_REMOTE_RELAY || "wss://api.r01omzmfm.nyat.app:42965/ws";
-const MAX_TEXT = 100_000;
-const SID_OK = /^[A-Za-z0-9_-]{8,128}$/;
 
 const EVENT_WHITELIST = new Set([
   "delta", "thinking_delta", "tool_use", "tool_result", "assistant_text",
@@ -109,8 +107,14 @@ function sessionsCompact() {
 async function sendData(obj) {
   if (!ws || !dataKey) return;
   try {
-    const { iv, ct } = await P.encryptText(dataKey, JSON.stringify(obj), `${state.room}:a2c`);
-    ws.send(JSON.stringify({ t: "data", iv, ct }));
+    const text = JSON.stringify(obj);
+    // 中继单帧 256 KB，密文 base64 后还要膨胀：太大就换成一句错误发出去，别让中继把整条连接断掉
+    if (P.plainBytes(text) > P.MAX_PLAIN_BYTES) {
+      if (obj && obj.type !== "error") await sendData({ type: "error", message: "payload too large" });
+      return;
+    }
+    const { iv, ct } = await P.encryptText(dataKey, text, `${state.room}:a2c`);
+    ws.send(JSON.stringify({ t: "data", peerId, iv, ct }));
   } catch (e) {
     log(`[remote] 发送失败: ${e.message}`);
   }
@@ -122,10 +126,17 @@ async function handleCommand(cmd) {
   if (cmd.cmd === "send") {
     const text = String(cmd.text || "").trim();
     if (!text) return sendData({ type: "error", message: "empty message" });
-    if (text.length > MAX_TEXT) return sendData({ type: "error", message: "message too long" });
     const sessionId = cmd.sessionId ? String(cmd.sessionId) : null;
-    if (sessionId && !SID_OK.test(sessionId)) return sendData({ type: "error", message: "bad session id" });
-    const item = enqueue({ message: text, sessionId, cid: cmd.cid ? String(cmd.cid).slice(0, 64) : null });
+    // 和 /api/chat 共用同一套校验：接口没了 / 没填 Key / 队列满 / 消息太长 / 会话号格式错都在这里挡
+    const bad = precheckChat({ message: text, sessionId });
+    if (bad) return sendData({ type: "error", code: bad.body.error, message: bad.body.message || bad.body.error });
+    let item;
+    try {
+      item = enqueue({ message: text, sessionId, cid: cmd.cid ? String(cmd.cid).slice(0, 64) : null });
+    } catch (e) {
+      log(`[remote] 入队失败: ${e.message}`);
+      return sendData({ type: "error", message: `enqueue failed: ${e.message}` });
+    }
     return sendData({ type: "queued", id: item.id, sessionId: item.sessionId || null, injected: !!item.injected });
   }
   if (cmd.cmd === "stop") {

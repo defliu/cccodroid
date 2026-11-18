@@ -3233,4 +3233,23 @@ window.I18N_DICT.en = {
   "stdio 不保存请求头：{names} 会被丢掉，继续吗？": "stdio doesn't store headers: {names} will be dropped. Continue?",
   "服务器在本机就填 http://127.0.0.1:端口 最稳；局域网 IP 会随网络切换而变化，导致断连": "If the server runs on this device, use http://127.0.0.1:port — a LAN IP changes when the network switches and the connection drops",
   "这像是一个局域网地址：服务器在本机的话，请改成 http://127.0.0.1:端口，局域网 IP 一变就断连": "This looks like a LAN address: if the server runs on this device, use http://127.0.0.1:port instead — a LAN IP changes and the connection drops",
+
+  // ── settings: remote control ──
+  "远程控制": "Remote control",
+  "启用远程控制": "Enable remote control",
+  "网关主动连出到中继，端到端加密；关掉立即断开，配对码保留": "The gateway connects out to the relay with end-to-end encryption; turning this off disconnects immediately and keeps the pairing code",
+  "配对链接": "Pairing link",
+  "在另一台设备（电脑浏览器或另一台手机）打开这个链接，就能看到会话、发消息、停止任务。链接里带着配对码，别发给别人。": "Open this link on another device (a desktop browser or another phone) to see sessions, send messages and stop runs. The link contains the pairing code — don't share it.",
+  "房间": "Room",
+  "配对码": "Pairing code",
+  "中继": "Relay",
+  "重新生成配对码": "Generate a new pairing code",
+  "配对码就是远程控制凭证：换设备或怀疑泄露时重新生成，旧设备会立刻连不上。中继只看得到密文，看不到配对码和消息内容。": "The pairing code is the remote-control credential: regenerate it when switching devices or if you suspect a leak, and old devices lose access immediately. The relay only sees ciphertext — never the code or message contents.",
+  "远程设备已接入": "Remote device connected",
+  "已连接中继，等待远程设备接入": "Connected to the relay, waiting for a remote device",
+  "正在连接中继…": "Connecting to the relay…",
+  "未启用": "Off",
+  "操作失败": "Action failed",
+  "再点一次确认（旧设备会断开）": "Tap again to confirm (old devices will disconnect)",
+  "配对码已重新生成": "New pairing code generated",
 };

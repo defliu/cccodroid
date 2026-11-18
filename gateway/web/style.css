@@ -3688,3 +3688,8 @@ html[dir="rtl"] #ctxbar:is(.warn,.danger) #ctxtxt{background:linear-gradient(270
 /* RTL：命令参数 / 路径按 LTR 排；标题用 start */
 .ts-head,.bubble .hook-ctx{text-align:start}
 html[dir="rtl"] :is(.tool-arg,.perm-path,.missing-img){direction:ltr;text-align:left;unicode-bidi:isolate}
+
+/* 远程控制（设置 → 远程控制）：配对链接一行 —— 输入框占满，复制 / 打开靠右 */
+.rm-link{display:flex;gap:8px;align-items:center;margin:8px 0 4px}
+.rm-link input{flex:1;min-width:0;font-size:11.5px;direction:ltr;text-align:left}
+html[dir="rtl"] .rm-link input{text-align:left}

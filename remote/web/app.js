@@ -15,6 +15,8 @@ import {
   encryptText,
   decryptText,
   keyProofMessage,
+  MAX_PLAIN_BYTES,
+  plainBytes,
 } from "/protocol.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -43,7 +45,9 @@ const state = {
   peerId: null,
   connected: false,
   manualClose: false,
+  fatal: false,
   retry: null,
+  retryDelay: 2000,
   sessions: [],
 };
 
@@ -97,15 +101,23 @@ function renderSessions(list, keep = true) {
 }
 
 async function sendCmd(obj) {
-  if (!state.connected || !state.dataKey) return;
+  if (!state.connected || !state.dataKey) return false;
   const payload = JSON.stringify(obj);
+  // 中继单帧 256 KB，密文 base64 后还要膨胀；超了中继会直接 1009 断开，所以在发之前挡住
+  if (plainBytes(payload) > MAX_PLAIN_BYTES) {
+    logLine(`消息太长（${Math.round(plainBytes(payload) / 1024)} KB），超过了中继的单帧上限，请拆成几条发送`, "sys");
+    return false;
+  }
   const { iv, ct } = await encryptText(state.dataKey, payload, `${state.room}:c2a`);
   state.ws.send(JSON.stringify({ t: "data", iv, ct }));
+  return true;
 }
 
-async function connect() {
+async function connect(fresh = false) {
   if (state.ws) return;
   state.manualClose = false;
+  state.fatal = false;
+  if (fresh) { ui.log.innerHTML = ""; streamEl = null; state.retryDelay = 2000; }
   state.room = ui.room.value.trim().toLowerCase();
   state.code = normalizeCode(ui.code.value);
   if (!/^[a-f0-9]{16,64}$/.test(state.room)) return setStatus("房间号格式不对", "bad");
@@ -147,6 +159,7 @@ async function connect() {
         const shared = await deriveShared(state.ecdh.privateKey, unb64url(pub));
         state.dataKey = await dataKeyFromShared(shared, state.room);
         state.connected = true;
+        state.retryDelay = 2000;
         setStatus("已加密连接", "ok");
         setInputs(true);
         ui.connect.disabled = true;
@@ -171,6 +184,8 @@ async function connect() {
       } else if (msg.t === "error") {
         logLine(`错误：${msg.code} ${msg.message || ""}`, "sys");
         setStatus("出错：" + (msg.code || "unknown"), "bad");
+        // 配对码不对是永久的，重试多少次都一样；no-room 只是网关暂时不在线，照常退避重连
+        if (msg.code === "bad-code") state.fatal = true;
         if (["bad-code", "no-room", "room-taken", "bad-open"].includes(msg.code)) ws.close();
       }
     } catch (e) {
@@ -191,9 +206,16 @@ async function connect() {
       setStatus("已断开");
       return;
     }
-    setStatus("连接断开，2 秒后重连…", "bad");
+    if (state.fatal) {
+      setStatus("配对码不对，已停止重试", "bad");
+      return;
+    }
+    // 网关重启期间房间会短暂不存在（no-room）：退避重连，2 秒起、翻倍、封顶 30 秒，连上后重置
+    const wait = state.retryDelay;
+    state.retryDelay = Math.min(state.retryDelay * 2, 30_000);
+    setStatus(`连接断开，${Math.round(wait / 1000)} 秒后重连…`, "bad");
     clearTimeout(state.retry);
-    state.retry = setTimeout(() => { if (!state.manualClose) connect(); }, 2000);
+    state.retry = setTimeout(() => { if (!state.manualClose && !state.fatal) connect(); }, wait);
   };
 
   ws.onerror = () => setStatus("连接失败", "bad");
@@ -267,7 +289,8 @@ async function send() {
   const text = ui.text.value.trim();
   if (!text || !state.connected) return;
   const sessionId = ui.session.value || undefined;
-  await sendCmd({ cmd: "send", text, sessionId, cid: `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+  const ok = await sendCmd({ cmd: "send", text, sessionId, cid: `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
+  if (!ok) return;          // 超长之类的发送失败：正文留在输入框里，别当成已发出
   logLine(text, "me");
   ui.text.value = "";
   streamEl = null;
@@ -279,7 +302,7 @@ function disconnect() {
   if (state.ws) state.ws.close();
 }
 
-ui.connect.addEventListener("click", () => { connect(); });
+ui.connect.addEventListener("click", () => { connect(true); });
 ui.disconnect.addEventListener("click", disconnect);
 ui.send.addEventListener("click", send);
 ui.stop.addEventListener("click", () => sendCmd({ cmd: "stop" }));
@@ -294,3 +317,5 @@ ui.text.addEventListener("keydown", (e) => {
 parseHash();
 setInputs(false);
 setStatus("未连接");
+// 配对链接（#room=…&code=…）打开即连：网关设置页给的链接就是拿来一键进入的
+if (ui.room.value.trim() && ui.code.value.trim()) connect(true);

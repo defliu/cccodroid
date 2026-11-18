@@ -44,7 +44,7 @@ let peerId = null;
 async function sendData(obj) {
   if (!dataKey) return;
   const { iv, ct } = await encryptText(dataKey, JSON.stringify(obj), `${room}:a2c`);
-  ws.send(JSON.stringify({ t: "data", iv, ct }));
+  ws.send(JSON.stringify({ t: "data", peerId, iv, ct }));
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

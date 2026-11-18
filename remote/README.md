@@ -1,12 +1,13 @@
-# cccodroid remote (Phase 0)
+# cccodroid remote (Phase 1)
 
-Outbound, end-to-end-encrypted remote channel for cccodroid. The phone-side
-gateway will connect **out** to this relay (Phase 1); remote clients (PWA) pair
-with a code and exchange AES-GCM messages. The relay only forwards opaque
-ciphertext — it never sees the pairing code or any plaintext.
+Outbound, end-to-end-encrypted remote control for cccodroid. The phone-side
+gateway dials **out** to the relay; a remote device (PWA in a browser) pairs with
+a code and drives sessions — list, chat, stop — over the encrypted channel. The
+relay only forwards opaque ciphertext; it never sees the pairing code or any
+plaintext.
 
 ```
-gateway (phone) ──WSS──▶ relay (this dir) ◀──WSS── PWA / browser
+phone gateway (gw/remote.mjs) ──WSS──▶ relay (remote/relay) ◀──WSS── PWA (remote/web)
 ```
 
 ## What is here
@@ -15,9 +16,21 @@ gateway (phone) ──WSS──▶ relay (this dir) ◀──WSS── PWA / bro
 |---|---|
 | `protocol.mjs` | Shared crypto/pairing helpers (Node + browser, no deps) |
 | `relay/server.mjs` | Minimal relay: HTTP static + WebSocket + rooms (zero deps) |
-| `web/` | Phase 0 PWA: join, handshake, send/receive |
+| `web/` | Remote PWA: pair, session list, chat stream, stop, auto-reconnect |
 | `test/phase0.test.mjs` | Relay + pairing + E2E round-trip test |
+| `test/phase1.test.mjs` | Relay routing contract: agent frames must carry `peerId` |
+| `test/mock-gateway.mjs` | Mock gateway bridge for browser-side integration testing |
 | `test/demo-agent.mjs` | Manual demo agent (opens a room, echoes messages) |
+| `phase1-test-report.md` | 9.1 联调记录（缺陷、清单结果、遗留项） |
+
+Gateway side (not in this dir):
+
+| Path | Purpose |
+|---|---|
+| `gateway/gw/remote.mjs` | Bridge: dials the relay, handshake, command/event mapping |
+| `gateway/gw/remote-protocol.mjs` | Node copy of `protocol.mjs` + `MAX_PLAIN_BYTES` |
+| `gateway/web/app/10c-remote.js` | Settings → 远程控制 page (toggle, pairing link, status) |
+| `/api/remote/status`, `/api/remote/enable`, `/api/remote/disable`, `/api/remote/reset` | Settings API |
 
 ## Run
 
@@ -25,14 +38,17 @@ gateway (phone) ──WSS──▶ relay (this dir) ◀──WSS── PWA / bro
 # relay (port 3010, loopback)
 node remote/relay/server.mjs --port 3010 --host 127.0.0.1
 
-# test
-node --test remote/test/phase0.test.mjs
+# tests
+node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs
 
-# demo agent for the PWA
-node remote/test/demo-agent.mjs ws://127.0.0.1:3010/ws
-# -> prints ROOM=… CODE=…
-# open http://127.0.0.1:3010/ and pair with those values
+# mock gateway for the PWA (prints ROOM=… CODE=… each start)
+node remote/test/mock-gateway.mjs ws://127.0.0.1:3010/ws
+# open http://127.0.0.1:3010/ and pair — or append #room=…&code=… to auto-connect
 ```
+
+On the phone, the same thing is done from **设置 → 远程控制**: enable, then copy
+the pairing link (`…/#room=…&code=…`) to the other device. The link carries the
+code — treat it as a credential.
 
 ## Pairing and crypto
 
@@ -51,6 +67,7 @@ node remote/test/demo-agent.mjs ws://127.0.0.1:3010/ws
 ```
 agent  → relay  {t:"open", room, codeHash, label?}
 client → relay  {t:"join", room, codeHash}
+relay  → agent  {t:"opened"}
 relay  → client {t:"joined", peerId, label?}
 relay  → agent  {t:"peer", event:"join"|"leave", peerId}
 client/agent    {t:"hello", peerId?, pub, mac}
@@ -58,6 +75,43 @@ client/agent    {t:"data",  peerId?, iv, ct}
 relay  → peer   {t:"closed"}
 relay  → both   {t:"error", code, message}
 ```
+
+Routing rules (`relay/server.mjs`):
+
+- client → agent: forwarded blindly to the room's agent, the relay stamps the
+  sender's `peerId` so the agent knows which remote it came from.
+- agent → client: **the agent must set `peerId`**. The relay looks the peer up;
+  a missing or unknown `peerId` gets `{t:"error",code:"no-peer"}` and the frame
+  is dropped. Phase 1 originally missed this on both the bridge and the mock
+  gateway — the PWA paired, showed "encrypted", and never received anything.
+  `test/phase1.test.mjs` pins both halves of the contract.
+
+Size limit: the relay closes a socket with 1009 above 256 KB per frame. Base64url
+ciphertext inflates ~4/3, so both ends cap plaintext at `MAX_PLAIN_BYTES`
+(180 000 bytes, `remote-protocol.mjs`): the PWA refuses to send and keeps the
+text in the box; the bridge replaces an oversized payload with an `error` frame
+instead of losing the whole connection.
+
+## Encrypted payloads
+
+Direction `c2a`: `{cmd:"send"|"stop"|"list"|"state", …}`; direction `a2c`:
+`{type:"ready"|"sessions"|"queued"|"delta"|"tool_use"|"tool_result"|"run_end"|
+"stopped"|"state"|"event"|"error", …}` — `ready` right after handshake, `event`
+wraps whitelisted bus events (`assistant_text`, `thinking_delta`, …). The bridge
+reuses `precheckChat()` from `gw/queue.mjs`,
+so remote sends hit the same provider / key / queue / length / session-id checks
+as `POST /api/chat`.
+
+## Behavior notes
+
+- The gateway persists room + code in `CFG.home/ccapp-remote.json` (mode 0600),
+  so restarts keep the same pairing; `POST /api/remote/reset` regenerates both
+  and old devices are locked out.
+- PWA reconnect: 2 s doubling to 30 s, reset after a good handshake. `bad-code`
+  is fatal (no retry loop). A pairing link auto-connects on load; the connect
+  button starts a fresh log.
+- Only one remote peer is routed at a time (the bridge keeps the newest
+  `peerId`); multi-device routing is Phase 2.
 
 ## Public endpoint (SakuraFrp)
 
@@ -78,10 +132,13 @@ Start the tunnel client (token is the SakuraFrp access key; keep it out of the r
 frpc -f <访问密钥>:29898220
 ```
 
-## Security notes (Phase 0)
+## Security notes
 
 - Relay keeps no state on disk; rooms disappear when the agent disconnects.
-- Limits: 256 KB frames, 80 msgs/10 s per socket, 4 peers/room, 1000 rooms.
+- Limits: 256 KB frames, 80 msgs/10 s per socket, 4 peers/room, 1000 rooms,
+  25 s ping timeout.
 - The public endpoint is HTTPS with a valid cert; WebSocket uses WSS.
-- Phase 1 will add: device revocation, session list/chat mapping, reconnect
-  semantics, and the gateway-side `gw/remote.mjs` bridge.
+- Pairing code = remote-control credential: anyone with it can drive the phone.
+  Reset when a device is lost; the settings page shows it only on the phone.
+- Not yet: device revocation list, per-device pairing, multi-peer routing
+  (Phase 2), rate limiting on the application layer beyond the relay's counters.
