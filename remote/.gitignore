@@ -1,0 +1,5 @@
+relay.log
+*.log
+test/demo-agent.out
+node_modules/
+test/*.out
