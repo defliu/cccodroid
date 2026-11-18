@@ -71,7 +71,7 @@
 
 ## 五、本机做不了的验证
 
-1. **9.2 Android 真机**：没有设备。
+1. **9.2 Android 真机**：没有设备。清单里的打包核实已做：`scripts/build.sh` 用 `cp "$SRC/gw/"*.mjs` 整目录拷网关模块、`cp -R` 拷整个 `web/`，新增的 `gw/remote*.mjs` 与 `web/app/10c-remote.js` 随目录进 APK，FILES 清单也由 build.sh 现场生成，无需改打包配置。剩下的真机启动、10 分钟观察只能上设备做。
 2. **设置页目视验证**：网关在 Windows 上起不来 —— `process.getuid()` 在 `usage.mjs` 顶层调用，导入即抛；`bridge-config.mjs`、`claude.mjs`、`leftover.mjs`、`managed-bridge.mjs`、`sessionops.mjs`、`storage.mjs` 也都有。按交接文档的约定不在 Windows 上硬跑。需要真机或 Linux 上看一眼布局。
 3. **翻译**：本机补的 17 条只有英文。`i18n/scan.mjs --all` 显示其他 8 种语言各缺 17 条，按仓库已有流程（`i18n/lang-*.txt` 生成）补即可。
 
