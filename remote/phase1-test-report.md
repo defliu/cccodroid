@@ -54,11 +54,20 @@
 - `gateway/gw/remote-protocol.mjs`：新增 `MAX_PLAIN_BYTES = 180_000` 与 `plainBytes()`（中继单帧 256 KB，base64 后膨胀 4/3）。
 - `remote/web/app.js`：发送前同样检查；被挡时正文保留、不记成「已发送」。
 
+### 9.5 安全与运维复核
+
+- **状态文件权限 0600**：`gw/remote.mjs` 的 `saveState()` 写入时 `mode: 0o600` 并补一次 `chmod`，确认无误。
+- **设备吊销 / 重置入口**：`/api/remote/reset` 已有，设置页「重新生成配对码」接上（两次点击确认）。
+- **中继限流 / 房间数 / 帧大小复核**：256 KB/帧、80 条/10 秒/连接、4 peer/房间、1000 房间、25 秒心跳，参数本身合理。复核时发现一个缺口：帧上限只查单帧，**分片消息（continuation 帧不置 FIN）的总量没有上限**，可被用来把中继内存撑大。已修：重组总量超过 `MAX_FRAME` 直接 1009 断开，并补 `remote/test/relay-limits.test.mjs`（正常分片仍能组装、超量分片必须 1009）。残余风险：中继没有按 IP 限流，攻击者可以重连反复试 `join`（只影响可用性，配对码哈希校验不受影响）。
+- **免费隧道流量**：5 GiB/月、10 Mbps，超了断；需在 SakuraFrp 面板看用量并每日签到。已写进 `README.md` 的 Operations。
+- **开机自启**：中继与 frpc 的自启属于中继所在机器的运维；`README.md` 的 Operations 给了 Windows 计划任务示例与 Linux systemd 提示（访问密钥仍不入库）。
+
 ## 四、测试
 
-- `node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs`：全部通过（含新增的 peerId 契约回归）。
+- `node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs remote/test/wsclient.test.mjs remote/test/relay-limits.test.mjs`：全部通过（含 peerId 契约回归与分片总量上限）。
 - 手动联调：relay 3012 + mock gateway，在浏览器面板里逐项走完第二节清单。
-- 设置页：本机无法运行网关（见第五节），只做了静态检查：分段拼接后的 `app.js` 语法通过（`node scripts/appjs.mjs`），`index.html` 的 id 与 `10c-remote.js` 引用一一对应。
+- 设置页：本机无法运行网关（见第五节），只做了静态检查：分段拼接后的 `app.js` 语法通过，`index.html` 的 id 与 `10c-remote.js` 引用一一对应。
+- 网关回归（Windows 上借用 `process.getuid` 垫片跑临时目录）：`queue-v062`、`provider-gone`、`stab-b-chat-idem` 15 项全过（覆盖 `precheckChat` 抽取）；前端/语言 45 项过 44，唯一失败的 `a0610-f3-frontend` C23 是工作区 CRLF 与测试里 LF 锚点不一致的 Windows 检出问题，与本次改动无关（该文件未动）。
 
 ## 五、本机做不了的验证
 

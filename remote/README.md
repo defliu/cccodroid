@@ -19,6 +19,7 @@ phone gateway (gw/remote.mjs) ──WSS──▶ relay (remote/relay) ◀──W
 | `web/` | Remote PWA: pair, session list, chat stream, stop, auto-reconnect |
 | `test/phase0.test.mjs` | Relay + pairing + E2E round-trip test |
 | `test/phase1.test.mjs` | Relay routing contract: agent frames must carry `peerId` |
+| `test/relay-limits.test.mjs` | Frame/message size caps (fragmented stream closes with 1009) |
 | `test/mock-gateway.mjs` | Mock gateway bridge for browser-side integration testing |
 | `test/demo-agent.mjs` | Manual demo agent (opens a room, echoes messages) |
 | `phase1-test-report.md` | 9.1 联调记录（缺陷、清单结果、遗留项） |
@@ -39,7 +40,7 @@ Gateway side (not in this dir):
 node remote/relay/server.mjs --port 3010 --host 127.0.0.1
 
 # tests
-node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs
+node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs remote/test/wsclient.test.mjs remote/test/relay-limits.test.mjs
 
 # mock gateway for the PWA (prints ROOM=… CODE=… each start)
 node remote/test/mock-gateway.mjs ws://127.0.0.1:3010/ws
@@ -135,10 +136,31 @@ frpc -f <访问密钥>:29898220
 ## Security notes
 
 - Relay keeps no state on disk; rooms disappear when the agent disconnects.
-- Limits: 256 KB frames, 80 msgs/10 s per socket, 4 peers/room, 1000 rooms,
-  25 s ping timeout.
+- Limits: 256 KB per frame **and per reassembled message** (a fragmented stream
+  without FIN is closed with 1009), 80 msgs/10 s per socket, 4 peers/room,
+  1000 rooms, 25 s ping timeout.
 - The public endpoint is HTTPS with a valid cert; WebSocket uses WSS.
 - Pairing code = remote-control credential: anyone with it can drive the phone.
   Reset when a device is lost; the settings page shows it only on the phone.
 - Not yet: device revocation list, per-device pairing, multi-peer routing
-  (Phase 2), rate limiting on the application layer beyond the relay's counters.
+  (Phase 2), per-IP limits on the relay (a client can reconnect to retry joins).
+
+## Operations
+
+The relay host is whichever machine runs `relay/server.mjs` + the two frpc
+processes. Checklist when moving or re-provisioning it:
+
+- Keep the relay on `127.0.0.1:3010` and let frpc terminate TLS (tunnel
+  `29898220`, local port 3010).
+- Check the SakuraFrp dashboard for traffic: the free plan is 5 GiB/month at
+  10 Mbps; the tunnel stops when it runs out. Daily check-in adds traffic.
+- Auto-start after login/reboot (Windows):
+
+  ```bat
+  schtasks /Create /TN cccodroid-relay /SC ONLOGON /TR "node D:\cccodroid\remote\relay\server.mjs --port 3010 --host 127.0.0.1"
+  schtasks /Create /TN cccodroid-frpc  /SC ONLOGON /TR "frpc -f <访问密钥>:29898220"
+  ```
+
+  or a systemd unit on Linux (`Restart=always`, `After=network-online.target`).
+- After restarting the relay, verify `https://api.r01omzmfm.nyat.app:42965/health`
+  returns `{"ok":true,…}` (the cert takes ~30 s on a cold frpc start).

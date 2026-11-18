@@ -128,12 +128,23 @@ function parseFrames(conn, chunk, onMessage) {
       if (opcode !== 0x0) {
         conn.frag = [payload];
         conn.fragOpcode = opcode;
+        conn.fragBytes = payload.length;
       } else {
         conn.frag.push(payload);
+        conn.fragBytes += payload.length;
+      }
+      // Each frame is capped above, but a message may arrive as an endless stream of continuation
+      // frames (no FIN) and never hit that check or the message rate limit: cap the total as well.
+      if (conn.fragBytes > MAX_FRAME) {
+        conn.frag = [];
+        conn.fragBytes = 0;
+        closeConn(conn, 1009, "message too large");
+        return;
       }
       if (!fin) continue;
       const whole = Buffer.concat(conn.frag);
       conn.frag = [];
+      conn.fragBytes = 0;
       if (conn.fragOpcode === 0x1 || opcode === 0x1) {
         let msg;
         try { msg = JSON.parse(whole.toString("utf8")); } catch { continue; }
@@ -261,6 +272,7 @@ export function createRelay({ log = () => {} } = {}) {
       buf: Buffer.alloc(0),
       frag: [],
       fragOpcode: 0,
+      fragBytes: 0,
       alive: true,
       closed: false,
       rateStart: Date.now(),
