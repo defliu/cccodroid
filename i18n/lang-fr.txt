@@ -3192,3 +3192,20 @@
 3192	stdio ne conserve pas les en-têtes : {names} seront supprimés. Continuer ?
 3193	Si le serveur tourne sur cet appareil, mettez http://127.0.0.1:port ; l'IP locale change avec le réseau et coupe la connexion
 3194	Cela ressemble à une adresse locale : si le serveur tourne sur cet appareil, remplacez-la par http://127.0.0.1:port ; l'IP locale change et la connexion tombe
+3195	Contrôle à distance
+3196	Activer le contrôle à distance
+3197	La passerelle se connecte au relais en sortie, avec chiffrement de bout en bout ; la désactiver coupe la connexion immédiatement et conserve le code d’appairage
+3198	Lien d’appairage
+3199	Ouvrez ce lien sur un autre appareil (navigateur d’ordinateur ou autre téléphone) pour voir les sessions, envoyer des messages et arrêter les tâches. Le lien contient le code d’appairage — ne le partagez pas.
+3200	Salon
+3201	Code d’appairage
+3202	Relais
+3203	Générer un nouveau code d’appairage
+3204	Le code d’appairage est l’identifiant du contrôle à distance : régénérez-le en changeant d’appareil ou en cas de fuite suspectée, et les anciens appareils perdront immédiatement l’accès. Le relais ne voit que le texte chiffré, jamais le code ni le contenu des messages.
+3205	Appareil distant connecté
+3206	Connecté au relais, en attente d’un appareil distant
+3207	Connexion au relais…
+3208	Désactivé
+3209	Échec de l’action
+3210	Appuyez à nouveau pour confirmer (les anciens appareils seront déconnectés)
+3211	Nouveau code d’appairage généré
