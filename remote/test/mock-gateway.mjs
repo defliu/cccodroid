@@ -25,6 +25,7 @@ import {
   decryptText,
   keyProofMessage,
 } from "../protocol.mjs";
+import { packHistory } from "../../gateway/gw/remote-history.mjs";
 
 const wsUrl = process.argv[2] || "ws://127.0.0.1:3012/ws";
 const outFile = path.join(path.dirname(fileURLToPath(import.meta.url)), "mock-gateway.out");
@@ -38,6 +39,24 @@ const sessions = [
   { id: "s-quant", title: "QuantLab 日常会话", updatedAt: Date.now(), project: "QuantLab", current: true },
   { id: "s-notes", title: "笔记整理", updatedAt: Date.now() - 86400e3, project: "notes" },
 ];
+
+// Phase 2 C：假历史（旧 → 新），用来在浏览器里验证「进入会话先看到最近消息」与顶部翻页。
+// cursor 就是「还剩多少条更老的」——和真实桥接的字节偏移语义不同，但 0 = 到头、before 往前翻一致。
+function synthHistory(sid, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const k = i % 17;
+    if (k === 3) out.push({ role: "tool_use", id: `${sid}-t${i}`, name: "Bash", input: "{\"command\":\"npm test\"}" });
+    else if (k === 4) out.push({ role: "tool_result", id: `${sid}-t${i - 1}`, ok: true, text: `ok（第 ${i + 1} 条）` });
+    else if (i % 5 === 0) out.push({ role: "user", text: `[${sid}] 历史问题 #${i + 1}：构建为什么失败？` });
+    else out.push({ role: "assistant", text: `[${sid}] 历史回答 #${i + 1}：构建失败是因为……（mock 历史）` });
+  }
+  return out;
+}
+const histories = new Map([
+  ["s-quant", synthHistory("s-quant", 95)],
+  ["s-notes", synthHistory("s-notes", 60)],
+]);
 
 let ws = null;
 const peers = new Map();   // peerId → { dataKey, ecdh, watch }
@@ -113,7 +132,19 @@ conn.onmessage = async (ev) => {
     let cmd;
     try { cmd = JSON.parse(text); } catch { return; }
     if (cmd.cmd === "list") await sendTo(m.peerId, { type: "sessions", sessions });
-    else if (cmd.cmd === "watch") {
+    else if (cmd.cmd === "history") {
+      const sid = String(cmd.sessionId || "");
+      const all = histories.get(sid);
+      const limit = Math.max(1, Math.min(100, parseInt(cmd.limit, 10) || 40));
+      if (!all) {
+        await sendTo(m.peerId, { type: "history", sessionId: sid, items: [], cursor: 0, missing: true });
+      } else {
+        const end = cmd.before == null ? all.length : Math.max(0, Math.min(all.length, Number(cmd.before) || 0));
+        const start = Math.max(0, end - limit);
+        console.log("history", m.peerId, sid, `#${start}-${end}`);
+        await sendTo(m.peerId, { type: "history", sessionId: sid, items: packHistory(all.slice(start, end)), cursor: start, size: all.length });
+      }
+    } else if (cmd.cmd === "watch") {
       peer.watch = cmd.sessionId || null;
       console.log("watch", m.peerId, peer.watch || "(all)");
       await sendTo(m.peerId, { type: "watching", sessionId: peer.watch });

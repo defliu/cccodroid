@@ -11,11 +11,13 @@ import crypto from "node:crypto";
 import { CFG, LIVE, log } from "./config.mjs";
 import { onPublish } from "./bus.mjs";
 import { enqueue, precheckChat, snapshot, abortRun } from "./queue.mjs";
-import { runList } from "./runs.mjs";
-import { listSessions } from "./sessions.mjs";
+import { runList, runOfSession } from "./runs.mjs";
+import { findSessionFile, listSessions } from "./sessions.mjs";
+import { readSessionPage } from "./transcript.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
 import { connectWs } from "./wsclient.mjs";
 import { eventSessionOf, wantsEvent } from "./remote-filter.mjs";
+import { packHistory } from "./remote-history.mjs";
 import * as P from "./remote-protocol.mjs";
 
 const STATE_FILE = path.join(CFG.home, "ccapp-remote.json");
@@ -135,9 +137,42 @@ async function sendTo(pid, obj) {
   }
 }
 
+/** 一页会话历史：和 /api/session/:id 一样从尾部倒读。正在生成的那一轮走事件总线实时推，
+ *  这里按 startedAt 剔掉，免得手机端同一轮画两遍。cursor 是这一页最早一行的字节偏移，
+ *  0 = 到头了；下次带 before=cursor 往前翻。 */
+async function historyPage(sid, cmd) {
+  const limit = Math.max(1, Math.min(100, parseInt(cmd.limit, 10) || 40));
+  const before = cmd.before == null || cmd.before === "" ? null : Math.max(0, Number(cmd.before) || 0);
+  const found = findSessionFile(sid);
+  if (!found) return { type: "history", sessionId: sid, items: [], cursor: 0, missing: true };
+  const live = runOfSession(sid);
+  const page = await readSessionPage(found.file, {
+    before, limit,
+    excludeFrom: live && Number.isFinite(live.startedAt) ? live.startedAt : 0,
+  });
+  return {
+    type: "history", sessionId: sid,
+    items: packHistory(page.items),
+    cursor: page.cursor,
+    size: page.size,
+    live: !!live,
+  };
+}
+
 async function handleCommand(pid, cmd) {
   if (!cmd || typeof cmd !== "object") return;
   if (cmd.cmd === "list") return sendTo(pid, { type: "sessions", sessions: sessionsCompact() });
+  if (cmd.cmd === "history") {
+    const sid = cmd.sessionId == null ? "" : String(cmd.sessionId);
+    if (!SID_OK.test(sid)) return sendTo(pid, { type: "error", message: "bad sessionId" });
+    let reply;
+    try { reply = await historyPage(sid, cmd); }
+    catch (e) {
+      log(`[remote] 读历史失败: ${e.message}`);
+      return sendTo(pid, { type: "error", message: "history failed" });
+    }
+    return sendTo(pid, reply);
+  }
   if (cmd.cmd === "watch") {
     const p = peers.get(pid);
     if (!p) return;

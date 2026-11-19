@@ -1,6 +1,6 @@
 # Phase 2 方案（远程控制）
 
-- 状态：A（事件过滤）+ B（多设备）已实现并通过本地验收（2026-11-19，见 `phase2-acceptance.md`，Android 真机项待设备执行）；C / D / E 未开工
+- 状态：A（事件过滤）+ B（多设备）已实现并通过本地验收；C（历史回放）已实现（2026-11-19，见 `phase2-acceptance.md`，Android 真机项待设备执行）；D / E 未开工
 - 前置：Phase 1 已完成并通过联调（见 `phase1-test-report.md`）
 - 原则：先把「多台设备 / 多个会话同时跑」的真实痛点解决，再铺历史回放一类的新界面；每项都能单独上线、单独回退。
 
@@ -10,6 +10,9 @@
 - 测试：`remote/test/filter.test.mjs`（归属/筛选矩阵）、`remote/test/phase1.test.mjs` 新增双 peer 路由用例、mock 网关支持多 peer 与 `watch`；浏览器里用 mock 验证了按会话过滤，用真实网关 + 第二个客户端验证了双设备各自握手、各自收 `ready`/`watching`，后加入者不影响先加入者。
 - 偏差：没有引入 `lastCid`（入队幂等已有 `cid` 全局去重，Peer 级重发去重暂无需求）；`remoteStatus()` 新增 `peers` 数组，`peer` 保留为「最近一台」。
 - 联调发现并修复：PWA 在 `hello` 与 `ready` 背靠背到达时可能先收到 `ready` 而密钥还没算完，会把 `ready` 丢掉 —— 现在先把 `data` 帧排队，握手完成再按序解密。
+- **C 已落地**：桥接新增 c2a `history`，和 `/api/session/:id` 共用倒读（`readSessionPage`），正在生成的轮按 `startedAt` 剔掉；新增 `gw/remote-history.mjs` 只发白名单字段（正文 8 KB、工具 4 KB、整页 120 KB 预算）。PWA 进入会话载入最近一页、顶部「加载更早」按 cursor 往前翻；切会话清屏、实时事件接在历史下面。mock 网关提供两段假历史（95 / 60 条）用于浏览器验收。
+- C 验收：`remote/test/history.test.mjs` 6/6（白名单、单条上限、整页预算、坏条目容错）；mock 浏览器（连点两次补齐 95 条、切会话、新会话、实时接续）；真实网关 + 合成会话（两页 cursor、`missing`）。
+- C 偏差：`thinking` 与 hook 上下文不下发手机（降噪、省帧）；整页预算 120 KB，而不是贴着 180 KB 的明文上限。
 
 ## 0. 现状与约束
 

@@ -49,8 +49,9 @@ const state = {
   retry: null,
   retryDelay: 2000,
   sessions: [],
-  watch: null,      // 已下发的会话筛选（null = 不过滤）；重连后由 ready 重新下发
+  watch: undefined, // 已下发的会话筛选（null = 不过滤）；undefined = 这条连接还没下发过，ready 后重下
   pending: [],      // 密钥还没算完就到达的 data 帧（hello 先到、ready 紧随其后），算完再解
+  history: { sessionId: null, cursor: 0, busy: false, tip: null, slot: null },   // 当前渲染的是哪个会话的历史
 };
 
 function setStatus(text, kind) {
@@ -58,10 +59,15 @@ function setStatus(text, kind) {
   ui.dot.className = "dot" + (kind ? " " + kind : "");
 }
 
-function logLine(text, cls = "sys") {
+function mkLine(text, cls = "sys") {
   const el = document.createElement("div");
   el.className = "msg " + cls;
   el.textContent = text;
+  return el;
+}
+
+function logLine(text, cls = "sys") {
+  const el = mkLine(text, cls);
   ui.log.appendChild(el);
   ui.log.scrollTop = ui.log.scrollHeight;
   return el;
@@ -104,6 +110,93 @@ function renderSessions(list, keep = true) {
   }
 }
 
+// ── 历史回放（Phase 2 C）：进入会话先补最近一页，顶部按钮往前翻 ──────────
+let moreBtn = null;       // 「加载更早」，历史区最上面
+let historyFirst = null;  // 已渲染历史里最老的一条，更早的页插在它前面
+
+function clearHistoryView() {
+  ui.log.innerHTML = "";
+  streamEl = null;
+  moreBtn = null;
+  historyFirst = null;
+}
+
+function setHistorySession(sid) {
+  clearHistoryView();
+  state.history = { sessionId: sid || null, cursor: 0, busy: false, tip: null, slot: null };
+  if (!sid) {
+    logLine("新会话：只显示实时输出", "sys");
+    return;
+  }
+  moreBtn = document.createElement("button");
+  moreBtn.type = "button";
+  moreBtn.className = "ghost more hidden";
+  moreBtn.textContent = "加载更早";
+  moreBtn.addEventListener("click", () => requestHistory(false));
+  ui.log.appendChild(moreBtn);
+  const opt = [...ui.session.options].find((o) => o.value === sid);
+  logLine(`会话历史：${opt ? opt.textContent : sid}`, "sys");
+  state.history.tip = logLine("正在载入最近的消息…", "sys");
+  state.history.slot = document.createComment("history");   // 历史都插在这个锚点前面
+  ui.log.appendChild(state.history.slot);
+  if (state.connected) requestHistory(true);
+}
+
+function requestHistory(reset) {
+  const h = state.history;
+  if (!h.sessionId || h.busy || !state.connected) return;
+  if (!reset && h.cursor <= 0) return;
+  h.busy = true;
+  if (moreBtn) { moreBtn.disabled = true; moreBtn.textContent = "载入中…"; }
+  sendCmd({ cmd: "history", sessionId: h.sessionId, before: reset ? null : h.cursor, limit: 40 });
+}
+
+function historyEl(it, names) {
+  if (!it || typeof it !== "object") return null;
+  if (it.role === "user") return it.text ? mkLine(it.text, "me") : null;
+  if (it.role === "assistant") return it.text ? mkLine(it.text, "them") : null;
+  if (it.role === "note") return it.text ? mkLine(it.text, "sys") : null;
+  if (it.role === "tool_use") return mkLine(`🛠 ${it.name || "tool"}`, "tool");
+  if (it.role === "tool_result") return mkLine(`${it.ok === false ? "✗" : "✓"} ${names.get(it.id) || "工具结果"}`, "tool");
+  return null;
+}
+
+function handleHistory(p) {
+  const h = state.history;
+  if (!p || p.sessionId !== h.sessionId) return;   // 已经切到别的会话，旧回包丢掉
+  h.busy = false;
+  if (h.tip) { h.tip.remove(); h.tip = null; }
+  if (moreBtn) { moreBtn.disabled = false; moreBtn.textContent = "加载更早"; }
+  if (p.missing) {
+    logLine("会话记录不在了（可能已被删除或移动）", "sys");
+    h.cursor = 0;
+    if (moreBtn) moreBtn.classList.add("hidden");
+    return;
+  }
+  const items = Array.isArray(p.items) ? p.items : [];
+  const names = new Map();   // tool_use id → 名字，同一页里的工具结果据此显示
+  for (const it of items) if (it && it.role === "tool_use" && it.id) names.set(it.id, it.name);
+  const frag = document.createDocumentFragment();
+  for (const it of items) {
+    const el = historyEl(it, names);
+    if (el) frag.appendChild(el);
+  }
+  const first = frag.firstChild;
+  if (first) {
+    const reset = historyFirst === null;
+    const oldH = ui.log.scrollHeight;
+    if (!reset && historyFirst.parentNode === ui.log) ui.log.insertBefore(frag, historyFirst);
+    else ui.log.insertBefore(frag, h.slot || null);
+    historyFirst = first;
+    if (reset) ui.log.scrollTop = ui.log.scrollHeight;
+    else ui.log.scrollTop += ui.log.scrollHeight - oldH;   // 往前翻：视野跟着插入的内容走，不跳到顶部
+  } else if (historyFirst === null) {
+    logLine("没有历史消息", "sys");
+  }
+  h.cursor = Number(p.cursor) || 0;
+  if (moreBtn) moreBtn.classList.toggle("hidden", h.cursor <= 0);
+}
+
 async function sendCmd(obj) {
   if (!state.connected || !state.dataKey) return false;
   const payload = JSON.stringify(obj);
@@ -119,10 +212,13 @@ async function sendCmd(obj) {
 
 // 把下拉框的选择同步给网关：选了会话就只收这个会话的进度，「新会话」发 null 不过滤。
 // 事件归属在网关侧解析（run_start/run_end 带会话号，中间事件靠 runId 映射），这里只管下发。
+// 换会话时顺带清屏并载入那一页历史，免得把上一个会话的流式内容混在一起。
 function pushWatch(force = false) {
   const sid = ui.session.value || null;
   if (!force && sid === state.watch) return;
+  const changed = sid !== state.watch;
   state.watch = sid;
+  if (changed || force) setHistorySession(sid);
   if (state.connected) sendCmd({ cmd: "watch", sessionId: sid });
 }
 
@@ -227,8 +323,9 @@ async function connect(fresh = false) {
     state.ws = null;
     state.connected = false;
     state.dataKey = null;
-    state.watch = null;     // 新连接要重新下发筛选
+    state.watch = undefined;   // 新连接要重新下发筛选
     state.pending = [];
+    state.history.busy = false;
     setInputs(false);
     ui.connect.disabled = false;
     ui.disconnect.disabled = true;
@@ -267,6 +364,9 @@ function handlePayload(p) {
       break;
     case "watching":
       if (p.sessionId) logLine("只显示所选会话的进度", "sys");
+      break;
+    case "history":
+      handleHistory(p);
       break;
     case "queued":
       logLine(p.injected ? "已插入当前轮" : "已发送，等待执行", "sys");

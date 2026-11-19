@@ -1,4 +1,4 @@
-# cccodroid remote (Phase 1 + Phase 2 A/B)
+# cccodroid remote (Phase 1 + Phase 2 A/B/C)
 
 Outbound, end-to-end-encrypted remote control for cccodroid. The phone-side
 gateway dials **out** to the relay; a remote device (PWA in a browser) pairs with
@@ -20,11 +20,12 @@ phone gateway (gw/remote.mjs) ──WSS──▶ relay (remote/relay) ◀──W
 | `test/phase0.test.mjs` | Relay + pairing + E2E round-trip test |
 | `test/phase1.test.mjs` | Relay routing contract: agent frames must carry `peerId`; two peers route independently |
 | `test/filter.test.mjs` | Event → session attribution and fail-open `watch` filtering |
+| `test/history.test.mjs` | History payload shaping: field whitelist, per-item caps, page budget |
 | `test/relay-limits.test.mjs` | Frame/message size caps (fragmented stream closes with 1009) |
 | `test/mock-gateway.mjs` | Mock gateway bridge (multi-peer + `watch`) for browser-side integration testing |
 | `test/demo-agent.mjs` | Manual demo agent (opens a room, echoes messages) |
 | `phase1-test-report.md` | 9.1 联调记录（缺陷、清单结果、遗留项） |
-| `phase2-acceptance.md` | Phase 2 A/B 验收记录：测试、mock 过滤、双设备联调、Android 真机清单 |
+| `phase2-acceptance.md` | Phase 2 A/B/C 验收记录：测试、mock 过滤、双设备联调、Android 真机清单 |
 
 Gateway side (not in this dir):
 
@@ -98,12 +99,13 @@ instead of losing the whole connection.
 
 ## Encrypted payloads
 
-Direction `c2a`: `{cmd:"send"|"stop"|"list"|"state"|"watch", …}`; direction `a2c`:
-`{type:"ready"|"sessions"|"queued"|"watching"|"delta"|"tool_use"|"tool_result"|
-"run_end"|"stopped"|"state"|"event"|"error", …}` — `ready` right after handshake,
-`event` wraps whitelisted bus events (`assistant_text`, `thinking_delta`, …). The
-bridge reuses `precheckChat()` from `gw/queue.mjs`, so remote sends hit the same
-provider / key / queue / length / session-id checks as `POST /api/chat`.
+Direction `c2a`: `{cmd:"send"|"stop"|"list"|"state"|"watch"|"history", …}`;
+direction `a2c`: `{type:"ready"|"sessions"|"queued"|"watching"|"history"|"delta"|
+"tool_use"|"tool_result"|"run_end"|"stopped"|"state"|"event"|"error", …}` — `ready`
+right after handshake, `event` wraps whitelisted bus events (`assistant_text`,
+`thinking_delta`, …). The bridge reuses `precheckChat()` from `gw/queue.mjs`, so
+remote sends hit the same provider / key / queue / length / session-id checks as
+`POST /api/chat`.
 
 ### Per-session event filtering (Phase 2 A)
 
@@ -128,6 +130,23 @@ encrypted separately for each watching device. `GET /api/remote/status` reports
 settings page). All devices share the room's pairing code and therefore the same
 permissions; per-device pairing/revocation is not implemented yet.
 
+### History replay (Phase 2 C)
+
+Selecting a session asks for its most recent page: `{cmd:"history", sessionId,
+before?, limit?}` → `{type:"history", sessionId, items, cursor, size, live?,
+missing?}`. `limit` defaults to 40 (max 100); `cursor` is the byte offset of the
+oldest line in the page, `0` means the beginning — the PWA's "加载更早" button
+sends `before=cursor` to page backwards. Pages are read with the same tail-first
+reader as `/api/session/:id`; the currently generating run is skipped
+(`startedAt`) because its events already stream live.
+
+Items are a whitelist, not raw transcript rows: `user` / `assistant` text,
+compact `note`s, `tool_use` (name + input as a clipped JSON string) and
+`tool_result` (id, ok, text). `thinking` and hook context are not sent. Text is
+capped at 8 KB (4 KB for tool payloads) and the whole page is packed under
+120 KB, so it stays inside the 180 KB plaintext / 256 KB frame limits. A session
+that no longer exists answers `missing: true` instead of an error.
+
 ## Behavior notes
 
 - The gateway persists room + code in `CFG.home/ccapp-remote.json` (mode 0600),
@@ -139,6 +158,9 @@ permissions; per-device pairing/revocation is not implemented yet.
 - The PWA sends `watch` after `ready` and on every session-dropdown change; it
   queues incoming `data` frames that arrive before the handshake key is ready
   (relay delivers `hello` and `ready` back-to-back).
+- Selecting a session clears the stream view and loads its latest history page
+  (also after reconnect); "load earlier" prepends without moving the scroll
+  position. Live events for that session append below the history.
 
 ## Public endpoint (SakuraFrp)
 
