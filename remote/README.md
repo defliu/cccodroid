@@ -1,4 +1,4 @@
-# cccodroid remote (Phase 1 + Phase 2 A/B/C)
+# cccodroid remote (Phase 1 + Phase 2 A/B/C/D/E)
 
 Outbound, end-to-end-encrypted remote control for cccodroid. The phone-side
 gateway dials **out** to the relay; a remote device (PWA in a browser) pairs with
@@ -21,11 +21,13 @@ phone gateway (gw/remote.mjs) ──WSS──▶ relay (remote/relay) ◀──W
 | `test/phase1.test.mjs` | Relay routing contract: agent frames must carry `peerId`; two peers route independently |
 | `test/filter.test.mjs` | Event → session attribution and fail-open `watch` filtering |
 | `test/history.test.mjs` | History payload shaping: field whitelist, per-item caps, page budget |
+| `test/perm.test.mjs` | Permission-card shaping and answer validation (Phase 2 D) |
+| `test/files.test.mjs` | Remote file policy: roots, traversal, secrets, read/blob limits (Phase 2 E) |
 | `test/relay-limits.test.mjs` | Frame/message size caps (fragmented stream closes with 1009) |
 | `test/mock-gateway.mjs` | Mock gateway bridge (multi-peer + `watch`) for browser-side integration testing |
 | `test/demo-agent.mjs` | Manual demo agent (opens a room, echoes messages) |
 | `phase1-test-report.md` | 9.1 联调记录（缺陷、清单结果、遗留项） |
-| `phase2-acceptance.md` | Phase 2 A/B/C 验收记录：测试、mock 过滤、双设备联调、Android 真机清单 |
+| `phase2-acceptance.md` | Phase 2 A/B/C/D/E 验收记录：测试、mock 过滤、双设备联调、真机清单 |
 
 Gateway side (not in this dir):
 
@@ -33,6 +35,9 @@ Gateway side (not in this dir):
 |---|---|
 | `gateway/gw/remote.mjs` | Bridge: dials the relay, per-device handshake, command/event routing |
 | `gateway/gw/remote-filter.mjs` | Pure helpers: event → session attribution, `watch` matching |
+| `gateway/gw/remote-history.mjs` | History payload shaping (whitelist, caps, page budget) |
+| `gateway/gw/remote-perm.mjs` | Permission-card shaping and remote-answer validation (D) |
+| `gateway/gw/remote-files.mjs` | File roots / containment / read / blob helpers (E) |
 | `gateway/gw/remote-protocol.mjs` | Node copy of `protocol.mjs` + `MAX_PLAIN_BYTES` |
 | `gateway/web/app/10c-remote.js` | Settings → 远程控制 page (toggle, pairing link, status) |
 | `/api/remote/status`, `/api/remote/enable`, `/api/remote/disable`, `/api/remote/reset` | Settings API |
@@ -44,7 +49,7 @@ Gateway side (not in this dir):
 node remote/relay/server.mjs --port 3010 --host 127.0.0.1
 
 # tests
-node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs remote/test/wsclient.test.mjs remote/test/relay-limits.test.mjs
+node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs remote/test/wsclient.test.mjs remote/test/relay-limits.test.mjs remote/test/filter.test.mjs remote/test/history.test.mjs remote/test/perm.test.mjs remote/test/files.test.mjs
 
 # mock gateway for the PWA (prints ROOM=… CODE=… each start)
 node remote/test/mock-gateway.mjs ws://127.0.0.1:3010/ws
@@ -99,13 +104,14 @@ instead of losing the whole connection.
 
 ## Encrypted payloads
 
-Direction `c2a`: `{cmd:"send"|"stop"|"list"|"state"|"watch"|"history", …}`;
-direction `a2c`: `{type:"ready"|"sessions"|"queued"|"watching"|"history"|"delta"|
-"tool_use"|"tool_result"|"run_end"|"stopped"|"state"|"event"|"error", …}` — `ready`
-right after handshake, `event` wraps whitelisted bus events (`assistant_text`,
-`thinking_delta`, …). The bridge reuses `precheckChat()` from `gw/queue.mjs`, so
-remote sends hit the same provider / key / queue / length / session-id checks as
-`POST /api/chat`.
+Direction `c2a`: `{cmd:"send"|"stop"|"list"|"state"|"watch"|"history"|"perm"|
+"ls"|"read"|"blob", …}`; direction `a2c`: `{type:"ready"|"sessions"|"queued"|
+"watching"|"history"|"perms"|"perm_ack"|"ls"|"read"|"blob"|"delta"|"tool_use"|
+"tool_result"|"run_end"|"stopped"|"state"|"event"|"error", …}` — `ready` right
+after handshake, `event` wraps whitelisted bus events (`assistant_text`,
+`thinking_delta`, `perm_request`, …). The bridge reuses `precheckChat()` from
+`gw/queue.mjs`, so remote sends hit the same provider / key / queue / length /
+session-id checks as `POST /api/chat`.
 
 ### Per-session event filtering (Phase 2 A)
 
@@ -147,6 +153,65 @@ capped at 8 KB (4 KB for tool payloads) and the whole page is packed under
 120 KB, so it stays inside the 180 KB plaintext / 256 KB frame limits. A session
 that no longer exists answers `missing: true` instead of an error.
 
+### Permission cards (Phase 2 D)
+
+`perm_request` / `perm_resolved` are whitelisted events. Each card is reshaped by
+`gw/remote-perm.mjs` before it leaves the phone: only `{id, tool, input, at,
+runId, sessionId, guard, blockedPath, reason, description, rules, canAlways, …}`
+survive, with a per-tool clip table for the input (Bash command 2 KB, Edit
+old/new 1.5 KB, Write content 2 KB + line count, plan 4 KB, AskUserQuestion
+questions/options only, unknown tools get a 2 KB JSON preview). A card that still
+exceeds `PERM_VIEW_MAX` (16 KB) falls back to `{preview, overflow:true}`.
+
+A device answers with `{cmd:"perm", id, behavior:"allow"|"deny", always?, mode?,
+message?, interrupt?, answers?}`. The bridge refuses the answer when remote
+control is disabled (`error`), when the id is no longer in any `run.perms`
+(`gone:true`), or when the fields fail validation (`bad id` / `bad behavior`).
+`always` is passed through only as `true`, and only claude's own `addRules` /
+`addDirectories` suggestions can be applied — the PWA cannot inject rules. `mode`
+is limited to `default` / `acceptEdits`; wide modes (`bypassPermissions`, `auto`,
+`dontAsk`) are handled per-run and are not reachable from the remote. Answers for
+`AskUserQuestion` are sanitized (≤ 20 questions, key ≤ 500, value ≤ 1000).
+Accepted answers go through `run.answerPerm()` — the same path as
+`POST /api/perm/answer` — and are acknowledged with `{type:"perm_ack", id, ok}`.
+`PERM_WAIT_MS` timeouts still deny on the phone.
+
+Pending cards are replayed after `ready` and after every `watch` (`{type:"perms",
+items}`), so a device that reconnects or switches sessions gets the cards that
+are still open. Resolutions are broadcast as `perm_resolved` (id, behavior,
+always, interrupt, expired), which also drives the "⌛ timed out" state.
+
+**Security:** remote approval hands machine control to whoever holds the pairing
+code. There is no per-device pairing or second confirmation yet; reset the code
+when a device is lost (see Security notes).
+
+### File browsing (Phase 2 E)
+
+`{cmd:"ls", path}` / `{cmd:"read", path, offset?, limit?}` / `{cmd:"blob", path,
+offset?}` are answered only inside two roots: the workspace and the project
+transcript directory (`CFG.home/.claude/projects`). Every path is first checked
+lexically against the roots and then resolved with `realpath()` and re-checked,
+so `..` traversal, absolute paths outside, and symlinks/junctions pointing out
+are all refused with `forbidden` whether or not the target exists — the PWA's
+path is never trusted. Secret file names and credential directories (same list
+as `gw/files.mjs`) are refused too; listings hide dotfiles, secrets, and
+escaping or dangling symlinks, put directories first, and stop at 500 entries
+(`truncated:true`).
+
+`read` returns at most 48 KB per request as UTF-8 text (`data`, `size`,
+`offset`, `next`, `eof`); a multibyte character cut by the boundary is dropped
+and the next read starts at `next`. Files with NUL bytes in the first 8 KB are
+reported as `binary` with size/mime instead of raw bytes. The reply is
+re-checked against `REPLY_MAX` (150 KB) after JSON escaping and truncated if
+needed. `blob` serves base64 in 90 000-byte chunks (≈120 KB base64, inside the
+180 KB plaintext cap) with `next` pointing at the next offset and `null` at the
+end; files above 5 MB are refused with `too large`.
+
+The PWA adds a 文件 panel: root selector (工作区 / 项目记录), path bar with 上一级,
+directory listing, and a text viewer with 继续读取 (each tap shows the next page,
+not cumulative) or an image preview assembled from blob chunks into a Blob URL.
+Other binaries show size + mime only; nothing is written back to the phone.
+
 ## Behavior notes
 
 - The gateway persists room + code in `CFG.home/ccapp-remote.json` (mode 0600),
@@ -161,6 +226,9 @@ that no longer exists answers `missing: true` instead of an error.
 - Selecting a session clears the stream view and loads its latest history page
   (also after reconnect); "load earlier" prepends without moving the scroll
   position. Live events for that session append below the history.
+- Switching sessions clears the permission cards on screen; the bridge replays
+  the ones still open after the new `watch`. The file panel closes when remote
+  control is disabled and keeps its own path history (no back stack beyond 上一级).
 
 ## Public endpoint (SakuraFrp)
 
@@ -188,10 +256,15 @@ frpc -f <访问密钥>:29898220
   without FIN is closed with 1009), 80 msgs/10 s per socket, 4 peers/room,
   1000 rooms, 25 s ping timeout.
 - The public endpoint is HTTPS with a valid cert; WebSocket uses WSS.
-- Pairing code = remote-control credential: anyone with it can drive the phone.
-  Reset when a device is lost; the settings page shows it only on the phone.
-- Not yet: device revocation list, per-device pairing, multi-peer routing
-  (Phase 2), per-IP limits on the relay (a client can reconnect to retry joins).
+- Pairing code = remote-control credential: anyone with it can drive the phone
+  **and answer permission prompts**. There is no second confirmation and no
+  per-device pairing yet; reset the code when a device is lost. The settings
+  page shows it only on the phone.
+- File browsing is limited to the workspace and the project transcript
+  directory; secret names and credential directories are filtered, but anything
+  else under those two roots is readable by any paired device.
+- Not yet: device revocation list, per-device pairing, per-IP limits on the
+  relay (a client can reconnect to retry joins).
 
 ## Operations
 

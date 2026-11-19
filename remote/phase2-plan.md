@@ -1,6 +1,6 @@
 # Phase 2 方案（远程控制）
 
-- 状态：A（事件过滤）+ B（多设备）已实现并通过本地验收；C（历史回放）已实现（2026-11-19，见 `phase2-acceptance.md`，Android 真机项待设备执行）；D / E 未开工
+- 状态：A（事件过滤）+ B（多设备）已实现并通过本地验收；C（历史回放）、D（权限卡）、E（文件浏览/预览）已实现（2026-11-19，见 `phase2-acceptance.md`，Android 真机项待设备执行）
 - 前置：Phase 1 已完成并通过联调（见 `phase1-test-report.md`）
 - 原则：先把「多台设备 / 多个会话同时跑」的真实痛点解决，再铺历史回放一类的新界面；每项都能单独上线、单独回退。
 
@@ -13,6 +13,12 @@
 - **C 已落地**：桥接新增 c2a `history`，和 `/api/session/:id` 共用倒读（`readSessionPage`），正在生成的轮按 `startedAt` 剔掉；新增 `gw/remote-history.mjs` 只发白名单字段（正文 8 KB、工具 4 KB、整页 120 KB 预算）。PWA 进入会话载入最近一页、顶部「加载更早」按 cursor 往前翻；切会话清屏、实时事件接在历史下面。mock 网关提供两段假历史（95 / 60 条）用于浏览器验收。
 - C 验收：`remote/test/history.test.mjs` 6/6（白名单、单条上限、整页预算、坏条目容错）；mock 浏览器（连点两次补齐 95 条、切会话、新会话、实时接续）；真实网关 + 合成会话（两页 cursor、`missing`）。
 - C 偏差：`thinking` 与 hook 上下文不下发手机（降噪、省帧）；整页预算 120 KB，而不是贴着 180 KB 的明文上限。
+- **D 已落地**：`perm_request` / `perm_resolved` 进白名单；新增 `gw/remote-perm.mjs` 整形卡片（16 KB 上限、按工具裁剪入参、超限回退为 preview）并校验远程答案。c2a `perm` 只接受白名单字段：`always` 仅为 `true` 且只能套 claude 自己的 `addRules` / `addDirectories` 建议；`mode` 限 `default` / `acceptEdits`（`bypassPermissions` / `auto` / `dontAsk` 远程不可达）；`AskUserQuestion` 的 answers 做条数/长度清洗；`deny` 可带 ≤2000 字消息与 `interrupt`。答案走 `run.answerPerm()`，回 `perm_ack`（`ok` / `gone` / `error` 三种结果）；远程禁用时拒绝。`ready` 与每次 `watch` 后补发仍未答的卡片；`PERM_WAIT_MS` 超时仍按拒绝处理。PWA 卡片支持允许 / 始终允许（规则）/ 计划模式 / 回答提问 / 拒绝 / 拒绝并停止，超时显示「⌛ 超时未答，按拒绝处理」。
+- D 验收：`remote/test/perm.test.mjs` 10/10；mock 浏览器验证卡片渲染、允许、始终允许、超时、拒绝、切走再切回后补发；真实网关校验 `perm` 对不存在 id 回 `gone`、非法 behavior 回 `error`。
+- D 偏差：没有做二次点击确认与按设备配对（原计划建议一起做），改为在 README / 验收记录里标注安全风险；卡片回放挂在 `ready` / `watch` 上，而不是单独的 `perms` 请求命令。
+- **E 已落地**：新增 `gw/remote-files.mjs`，只放行工作区与项目记录目录；路径先做词法检查再 `realpath()` 复核，`..`、范围外绝对路径、逃逸软链/junction 一律 `forbidden`（不区分存在与否），密钥文件名/凭据目录沿用 `files.mjs` 的名单。c2a `ls` / `read` / `blob`：目录列表隐藏点文件与密钥、破链不列、目录在前、500 条封顶；`read` 每页 48 KB UTF-8 文本，多字节边界截断丢弃半字符，前 8 KB 含 NUL 判为二进制，转义后按 150 KB 复核；`blob` 按 90 000 字节分片（base64 后约 120 KB），单文件上限 5 MB。PWA 新增文件面板：根切换、上一级、目录列表、文本预览「继续读取」、图片按分片拼成 Blob URL 预览。
+- E 验收：`remote/test/files.test.mjs` 13/13；mock 浏览器验证列目录、文本翻页、图片预览、上一级；真实网关冒烟 10 条命令（工作区列表、跨目录/范围外/密钥/`/etc/passwd` 拒绝、文本读取、目录误读、blob 分片、非法 perm 答案）。
+- E 偏差：文本「继续读取」每页只显示从 `next` 开始的内容（不是累积）；`ls`/`read` 走 150 KB 预算而不是计划里的 120 KB，留出 JSON 转义余量但仍在 180 KB 明文上限内；不提供下载写回，只读。
 
 ## 0. 现状与约束
 
