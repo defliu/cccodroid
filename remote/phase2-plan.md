@@ -1,8 +1,15 @@
 # Phase 2 方案（远程控制）
 
-- 状态：方案，未开工
+- 状态：A（事件过滤）+ B（多设备）已实现（2026-11-19）；C / D / E 未开工
 - 前置：Phase 1 已完成并通过联调（见 `phase1-test-report.md`）
 - 原则：先把「多台设备 / 多个会话同时跑」的真实痛点解决，再铺历史回放一类的新界面；每项都能单独上线、单独回退。
+
+## 进度（2026-11-19）
+
+- **A + B 已落地**：`gateway/gw/remote.mjs` 换成每 peer 一份 `{dataKey, ecdh, watch, at}`；新增 `gateway/gw/remote-filter.mjs`（事件归属 + fail-open 匹配）；PWA 在 `ready` 和下拉框变化时下发 `watch`；设置页显示「N 台远程设备已接入」。
+- 测试：`remote/test/filter.test.mjs`（归属/筛选矩阵）、`remote/test/phase1.test.mjs` 新增双 peer 路由用例、mock 网关支持多 peer 与 `watch`；浏览器里用 mock 验证了按会话过滤，用真实网关 + 第二个客户端验证了双设备各自握手、各自收 `ready`/`watching`，后加入者不影响先加入者。
+- 偏差：没有引入 `lastCid`（入队幂等已有 `cid` 全局去重，Peer 级重发去重暂无需求）；`remoteStatus()` 新增 `peers` 数组，`peer` 保留为「最近一台」。
+- 联调发现并修复：PWA 在 `hello` 与 `ready` 背靠背到达时可能先收到 `ready` 而密钥还没算完，会把 `ready` 丢掉 —— 现在先把 `data` 帧排队，握手完成再按序解密。
 
 ## 0. 现状与约束
 

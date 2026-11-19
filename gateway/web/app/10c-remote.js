@@ -10,11 +10,14 @@
     $("rm-on").checked = !!s.enabled;
     $("rm-block").classList.toggle("hidden", !s.enabled);
     const st = $("rm-state");
-    const ok = !!s.connected;
+    const n = Array.isArray(s.peers) ? s.peers.length : (s.peer ? 1 : 0);
+    const ok = n > 0;
     st.className = "prov-state" + (ok ? " ok" : (s.enabled ? " warn" : ""));
-    st.textContent = ok
-      ? (s.peer ? t("远程设备已接入") : t("已连接中继，等待远程设备接入"))
-      : (s.enabled ? t("正在连接中继…") : t("未启用"));
+    st.textContent = !s.connected
+      ? (s.enabled ? t("正在连接中继…") : t("未启用"))
+      : n > 1 ? t("已接入 {n} 台远程设备", { n })
+        : n === 1 ? t("远程设备已接入")
+          : t("已连接中继，等待远程设备接入");
     $("rm-link").value = s.url || "";
     $("rm-room").textContent = s.room || "—";
     $("rm-code").textContent = s.code || "—";

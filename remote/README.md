@@ -1,4 +1,4 @@
-# cccodroid remote (Phase 1)
+# cccodroid remote (Phase 1 + Phase 2 A/B)
 
 Outbound, end-to-end-encrypted remote control for cccodroid. The phone-side
 gateway dials **out** to the relay; a remote device (PWA in a browser) pairs with
@@ -18,9 +18,10 @@ phone gateway (gw/remote.mjs) ──WSS──▶ relay (remote/relay) ◀──W
 | `relay/server.mjs` | Minimal relay: HTTP static + WebSocket + rooms (zero deps) |
 | `web/` | Remote PWA: pair, session list, chat stream, stop, auto-reconnect |
 | `test/phase0.test.mjs` | Relay + pairing + E2E round-trip test |
-| `test/phase1.test.mjs` | Relay routing contract: agent frames must carry `peerId` |
+| `test/phase1.test.mjs` | Relay routing contract: agent frames must carry `peerId`; two peers route independently |
+| `test/filter.test.mjs` | Event → session attribution and fail-open `watch` filtering |
 | `test/relay-limits.test.mjs` | Frame/message size caps (fragmented stream closes with 1009) |
-| `test/mock-gateway.mjs` | Mock gateway bridge for browser-side integration testing |
+| `test/mock-gateway.mjs` | Mock gateway bridge (multi-peer + `watch`) for browser-side integration testing |
 | `test/demo-agent.mjs` | Manual demo agent (opens a room, echoes messages) |
 | `phase1-test-report.md` | 9.1 联调记录（缺陷、清单结果、遗留项） |
 
@@ -28,7 +29,8 @@ Gateway side (not in this dir):
 
 | Path | Purpose |
 |---|---|
-| `gateway/gw/remote.mjs` | Bridge: dials the relay, handshake, command/event mapping |
+| `gateway/gw/remote.mjs` | Bridge: dials the relay, per-device handshake, command/event routing |
+| `gateway/gw/remote-filter.mjs` | Pure helpers: event → session attribution, `watch` matching |
 | `gateway/gw/remote-protocol.mjs` | Node copy of `protocol.mjs` + `MAX_PLAIN_BYTES` |
 | `gateway/web/app/10c-remote.js` | Settings → 远程控制 page (toggle, pairing link, status) |
 | `/api/remote/status`, `/api/remote/enable`, `/api/remote/disable`, `/api/remote/reset` | Settings API |
@@ -95,13 +97,35 @@ instead of losing the whole connection.
 
 ## Encrypted payloads
 
-Direction `c2a`: `{cmd:"send"|"stop"|"list"|"state", …}`; direction `a2c`:
-`{type:"ready"|"sessions"|"queued"|"delta"|"tool_use"|"tool_result"|"run_end"|
-"stopped"|"state"|"event"|"error", …}` — `ready` right after handshake, `event`
-wraps whitelisted bus events (`assistant_text`, `thinking_delta`, …). The bridge
-reuses `precheckChat()` from `gw/queue.mjs`,
-so remote sends hit the same provider / key / queue / length / session-id checks
-as `POST /api/chat`.
+Direction `c2a`: `{cmd:"send"|"stop"|"list"|"state"|"watch", …}`; direction `a2c`:
+`{type:"ready"|"sessions"|"queued"|"watching"|"delta"|"tool_use"|"tool_result"|
+"run_end"|"stopped"|"state"|"event"|"error", …}` — `ready` right after handshake,
+`event` wraps whitelisted bus events (`assistant_text`, `thinking_delta`, …). The
+bridge reuses `precheckChat()` from `gw/queue.mjs`, so remote sends hit the same
+provider / key / queue / length / session-id checks as `POST /api/chat`.
+
+### Per-session event filtering (Phase 2 A)
+
+Each device sends `{cmd:"watch", sessionId}` — the selected session, or `null`
+for "new session / no filter". The bridge acks with `{type:"watching",
+sessionId}` and then forwards only events that belong to that session.
+
+Attribution (`gw/remote-filter.mjs`): `ev.sessionId` → `session_gone`'s `ev.id`
+→ `runList()` lookup by `ev.runId` (events mid-run only carry `runId`). The rule
+is **fail-open**: when the device has a filter and the event's origin is known
+but different, the event is dropped; unknown origins are still forwarded. A new
+session has no session id until its run reports `init`, so strict filtering
+would hide the turn the user just started.
+
+### Multiple devices (Phase 2 B)
+
+The relay allows 4 peers per room; the bridge keeps one entry per peer
+(`peerId → {dataKey, ecdh, watch, at}`), so every device has its own handshake,
+key and filter. Command replies go only to the device that asked; bus events are
+encrypted separately for each watching device. `GET /api/remote/status` reports
+`peers: [{peerId, at, watch}]` (plus `peer` as the most recent one, kept for the
+settings page). All devices share the room's pairing code and therefore the same
+permissions; per-device pairing/revocation is not implemented yet.
 
 ## Behavior notes
 
@@ -111,8 +135,9 @@ as `POST /api/chat`.
 - PWA reconnect: 2 s doubling to 30 s, reset after a good handshake. `bad-code`
   is fatal (no retry loop). A pairing link auto-connects on load; the connect
   button starts a fresh log.
-- Only one remote peer is routed at a time (the bridge keeps the newest
-  `peerId`); multi-device routing is Phase 2.
+- The PWA sends `watch` after `ready` and on every session-dropdown change; it
+  queues incoming `data` frames that arrive before the handshake key is ready
+  (relay delivers `hello` and `ready` back-to-back).
 
 ## Public endpoint (SakuraFrp)
 

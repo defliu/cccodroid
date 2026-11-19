@@ -3209,3 +3209,4 @@
 3209	La operación falló
 3210	Toca de nuevo para confirmar (los dispositivos antiguos se desconectarán)
 3211	Se generó un código de emparejamiento nuevo
+3212	{n} dispositivos remotos conectados

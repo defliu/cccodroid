@@ -3246,6 +3246,7 @@ window.I18N_DICT.en = {
   "重新生成配对码": "Generate a new pairing code",
   "配对码就是远程控制凭证：换设备或怀疑泄露时重新生成，旧设备会立刻连不上。中继只看得到密文，看不到配对码和消息内容。": "The pairing code is the remote-control credential: regenerate it when switching devices or if you suspect a leak, and old devices lose access immediately. The relay only sees ciphertext — never the code or message contents.",
   "远程设备已接入": "Remote device connected",
+  "已接入 {n} 台远程设备": "{n} remote devices connected",
   "已连接中继，等待远程设备接入": "Connected to the relay, waiting for a remote device",
   "正在连接中继…": "Connecting to the relay…",
   "未启用": "Off",

@@ -49,6 +49,8 @@ const state = {
   retry: null,
   retryDelay: 2000,
   sessions: [],
+  watch: null,      // 已下发的会话筛选（null = 不过滤）；重连后由 ready 重新下发
+  pending: [],      // 密钥还没算完就到达的 data 帧（hello 先到、ready 紧随其后），算完再解
 };
 
 function setStatus(text, kind) {
@@ -113,6 +115,30 @@ async function sendCmd(obj) {
   return true;
 }
 
+// 把下拉框的选择同步给网关：选了会话就只收这个会话的进度，「新会话」发 null 不过滤。
+// 事件归属在网关侧解析（run_start/run_end 带会话号，中间事件靠 runId 映射），这里只管下发。
+function pushWatch(force = false) {
+  const sid = ui.session.value || null;
+  if (!force && sid === state.watch) return;
+  state.watch = sid;
+  if (state.connected) sendCmd({ cmd: "watch", sessionId: sid });
+}
+
+async function onDataFrame(iv, ct) {
+  const text = await decryptText(state.dataKey, iv, ct, `${state.room}:a2c`);
+  let payload;
+  try { payload = JSON.parse(text); } catch { payload = { type: "text", text }; }
+  handlePayload(payload);
+}
+
+async function drainPending() {
+  const frames = state.pending;
+  state.pending = [];
+  for (const f of frames) {
+    try { await onDataFrame(f.iv, f.ct); } catch (e) { logLine("处理失败：" + (e && e.message ? e.message : String(e)), "sys"); }
+  }
+}
+
 async function connect(fresh = false) {
   if (state.ws) return;
   state.manualClose = false;
@@ -167,13 +193,15 @@ async function connect(fresh = false) {
         ui.room.disabled = true;
         ui.code.disabled = true;
         logLine("通道已建立（端到端加密）", "sys");
+        await drainPending();          // 先补上握手期间到达的 ready，再拉列表
         await sendCmd({ cmd: "list" });
       } else if (msg.t === "data") {
-        if (!state.dataKey) return;
-        const text = await decryptText(state.dataKey, msg.iv, msg.ct, `${state.room}:a2c`);
-        let payload;
-        try { payload = JSON.parse(text); } catch { payload = { type: "text", text }; }
-        handlePayload(payload);
+        if (!state.dataKey) {
+          // hello 与 ready 几乎同时到达，密钥可能还没算完：先存着，握手完成再按序解开
+          if (state.pending.length < 50) state.pending.push({ iv: msg.iv, ct: msg.ct });
+          return;
+        }
+        await onDataFrame(msg.iv, msg.ct);
       } else if (msg.t === "peer" && msg.event === "join") {
         logLine("网关已上线", "sys");
       } else if (msg.t === "peer" && msg.event === "leave") {
@@ -197,6 +225,8 @@ async function connect(fresh = false) {
     state.ws = null;
     state.connected = false;
     state.dataKey = null;
+    state.watch = null;     // 新连接要重新下发筛选
+    state.pending = [];
     setInputs(false);
     ui.connect.disabled = false;
     ui.disconnect.disabled = true;
@@ -227,9 +257,14 @@ function handlePayload(p) {
     case "ready":
       renderSessions(p.sessions, false);
       logLine(`已连接网关（${(p.sessions || []).length} 个会话）`, "sys");
+      pushWatch();
       break;
     case "sessions":
       renderSessions(p.sessions, true);
+      pushWatch();
+      break;
+    case "watching":
+      if (p.sessionId) logLine("只显示所选会话的进度", "sys");
       break;
     case "queued":
       logLine(p.injected ? "已插入当前轮" : "已发送，等待执行", "sys");
@@ -307,6 +342,7 @@ ui.disconnect.addEventListener("click", disconnect);
 ui.send.addEventListener("click", send);
 ui.stop.addEventListener("click", () => sendCmd({ cmd: "stop" }));
 ui.refresh.addEventListener("click", () => sendCmd({ cmd: "list" }));
+ui.session.addEventListener("change", () => pushWatch(true));
 ui.text.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();

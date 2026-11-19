@@ -3209,3 +3209,4 @@
 3209	Tindakan gagal
 3210	Ketuk sekali lagi untuk mengonfirmasi (perangkat lama akan terputus)
 3211	Kode pairing baru dibuat
+3212	{n} perangkat jarak jauh terhubung

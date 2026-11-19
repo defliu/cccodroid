@@ -3209,3 +3209,4 @@
 3209	Échec de l’action
 3210	Appuyez à nouveau pour confirmer (les anciens appareils seront déconnectés)
 3211	Nouveau code d’appairage généré
+3212	{n} appareils distants connectés
