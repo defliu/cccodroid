@@ -18,6 +18,11 @@ import { NEXT, readBody, sendJson } from "./http.mjs";
 import { connectWs } from "./wsclient.mjs";
 import { eventSessionOf, wantsEvent } from "./remote-filter.mjs";
 import { packHistory } from "./remote-history.mjs";
+import { permForRemote, permAnswerFor } from "./remote-perm.mjs";
+import {
+  allowedRoots, rootList, resolveRemotePath, parentOf, listDir,
+  readTextFile, blobChunk, fitTextReply,
+} from "./remote-files.mjs";
 import * as P from "./remote-protocol.mjs";
 
 const STATE_FILE = path.join(CFG.home, "ccapp-remote.json");
@@ -26,6 +31,8 @@ const DEFAULT_RELAY = process.env.CCAPP_REMOTE_RELAY || "wss://api.r01omzmfm.nya
 const EVENT_WHITELIST = new Set([
   "delta", "thinking_delta", "tool_use", "tool_result", "assistant_text",
   "phase", "run_end", "error", "session_gone", "usage", "compacting", "compacted", "discard_partial",
+  // Phase 2 D：权限卡。请求按工具白名单整形后再发（remote-perm.mjs），答案只回行为与理由
+  "perm_request", "perm_resolved",
 ]);
 
 const clip = (s, n) => (typeof s === "string" && s.length > n ? s.slice(0, n) + "…" : s);
@@ -159,6 +166,21 @@ async function historyPage(sid, cmd) {
   };
 }
 
+/** 这个设备此刻该看到的待答权限卡：握手、切会话时补发一次；之后新来的走事件。
+ *  带 watch 的只发这个会话的（归属不明的仍发，和事件过滤的 fail-open 一致）。 */
+function pendingPerms(watch) {
+  const out = [];
+  for (const r of runList()) {
+    if (!r.perms || !r.perms.size) continue;
+    for (const p of r.perms.values()) {
+      if (watch && p.sessionId && p.sessionId !== watch) continue;
+      const v = permForRemote(p);
+      if (v) out.push(v);
+    }
+  }
+  return out;
+}
+
 async function handleCommand(pid, cmd) {
   if (!cmd || typeof cmd !== "object") return;
   if (cmd.cmd === "list") return sendTo(pid, { type: "sessions", sessions: sessionsCompact() });
@@ -180,7 +202,65 @@ async function handleCommand(pid, cmd) {
     if (sid !== null && !SID_OK.test(sid)) return sendTo(pid, { type: "error", message: "bad sessionId" });
     p.watch = sid;
     log(sid ? `[remote] 设备 ${pid} 只收会话 ${sid} 的事件` : `[remote] 设备 ${pid} 收全部会话的事件`);
-    return sendTo(pid, { type: "watching", sessionId: sid });
+    await sendTo(pid, { type: "watching", sessionId: sid });
+    return sendTo(pid, { type: "perms", items: pendingPerms(sid) });
+  }
+  if (cmd.cmd === "perm") {
+    // 远程审批：id 必须是当前 run.perms 里真实存在的；always 只是布尔，规则由 claude 自己的建议决定
+    const { id, a, error } = permAnswerFor(cmd);
+    if (error) return sendTo(pid, { type: "perm_ack", id: id || "", ok: false, error });
+    if (!state.enabled) return sendTo(pid, { type: "perm_ack", id, ok: false, error: "remote disabled" });
+    const run = runList().find((r) => r.perms && r.perms.has(id));
+    if (!run) return sendTo(pid, { type: "perm_ack", id, ok: false, gone: true });
+    let ok = false;
+    try { ok = run.answerPerm(id, a); } catch (e) { log(`[remote] 回答权限失败: ${e.message}`); }
+    log(`[remote] 设备 ${pid} ${a.behavior === "allow" ? "允许" : "拒绝"} ${id}${ok ? "" : "（没答上，可能已超时）"}`);
+    // perm_resolved 由 answerPerm 广播给所有设备；这里只回执给点了按钮的那台
+    return sendTo(pid, { type: "perm_ack", id, ok });
+  }
+  if (cmd.cmd === "ls") {
+    // 只认工作区与项目记录目录；路径一律在桥接侧 realpath + 范围校验，不信手机传来的字符串
+    const roots = allowedRoots();
+    const r = resolveRemotePath(cmd.path, { roots });
+    if (r.error) return sendTo(pid, { type: "ls", path: "", entries: [], roots: rootList(roots), error: r.error });
+    let st;
+    try { st = fs.statSync(r.path); } catch { return sendTo(pid, { type: "ls", path: r.path, entries: [], roots: rootList(roots), error: "not found" }); }
+    if (!st.isDirectory()) return sendTo(pid, { type: "ls", path: r.path, entries: [], roots: rootList(roots), error: "not a directory" });
+    let listing;
+    try { listing = listDir(r.path, { roots }); }
+    catch (e) {
+      log(`[remote] 列目录失败: ${e.message}`);
+      return sendTo(pid, { type: "ls", path: r.path, entries: [], roots: rootList(roots), error: /EACCES|EPERM/.test(String(e.code)) ? "forbidden" : "ls failed" });
+    }
+    return sendTo(pid, {
+      type: "ls", path: r.path, parent: parentOf(r.path, roots), roots: rootList(roots),
+      entries: listing.entries, truncated: listing.truncated,
+    });
+  }
+  if (cmd.cmd === "read") {
+    const r = resolveRemotePath(cmd.path);
+    if (r.error) return sendTo(pid, { type: "read", path: "", error: r.error });
+    try {
+      const rep = readTextFile(r.path, cmd);
+      if (rep.error) return sendTo(pid, { type: "read", path: r.path, error: rep.error });
+      return sendTo(pid, fitTextReply({ type: "read", path: r.path, ...rep }));
+    } catch (e) {
+      log(`[remote] 读文件失败: ${e.message}`);
+      return sendTo(pid, { type: "read", path: r.path, error: "read failed" });
+    }
+  }
+  if (cmd.cmd === "blob") {
+    const r = resolveRemotePath(cmd.path);
+    if (r.error) return sendTo(pid, { type: "blob", path: "", error: r.error });
+    try {
+      const rep = blobChunk(r.path, cmd.offset);
+      if (rep.error) return sendTo(pid, { type: "blob", path: r.path, ...rep });
+      // 一条一帧：base64 分片后约 120 KB，远低于 180 KB 明文上限；手机端按 next 拼回去
+      return sendTo(pid, { type: "blob", path: r.path, mime: rep.mime, size: rep.size, offset: rep.offset, next: rep.next, chunk: rep.data });
+    } catch (e) {
+      log(`[remote] 读二进制失败: ${e.message}`);
+      return sendTo(pid, { type: "blob", path: r.path, error: "read failed" });
+    }
   }
   if (cmd.cmd === "send") {
     const text = String(cmd.text || "").trim();
@@ -210,6 +290,17 @@ async function handleCommand(pid, cmd) {
 }
 
 function trimEvent(ev) {
+  // 权限卡：只发手机卡片要显示的部分；没有 id 的请求不发
+  if (ev.type === "perm_request") {
+    const v = permForRemote(ev);
+    return v ? { type: "perm_request", ...v } : null;
+  }
+  if (ev.type === "perm_resolved") {
+    return {
+      type: "perm_resolved", id: String(ev.id || "").slice(0, 200), behavior: ev.behavior, always: !!ev.always,
+      ...(ev.interrupt ? { interrupt: true } : {}), ...(ev.expired ? { expired: true } : {}),
+    };
+  }
   const out = { ...ev };
   if (out.type === "tool_use" && out.input !== undefined) {
     out.input = clip(typeof out.input === "string" ? out.input : JSON.stringify(out.input), 4000);
@@ -270,6 +361,8 @@ function handleRelay(msg) {
       markLastPeer(pid);
       log(`[remote] 端到端加密已建立: ${pid}（共 ${peers.size} 台）`);
       await sendTo(pid, { type: "ready", sessions: sessionsCompact() });
+      // 重连时可能有正等着的权限卡：补发一份，别让它因为事件已经发过就永远看不见
+      await sendTo(pid, { type: "perms", items: pendingPerms(peer.watch) });
     })().catch((e) => log(`[remote] 握手失败: ${e.message}`));
     return;
   }
@@ -400,6 +493,7 @@ export async function routeRemote(req, res, u, p) {
 onPublish((ev) => {
   if (!ws || !peers.size || !ev || !EVENT_WHITELIST.has(ev.type)) return;
   const trimmed = trimEvent(ev);
+  if (!trimmed) return;
   const sid = eventSessionOf(ev, runList());
   for (const [pid, p] of peers) {
     if (!p.dataKey || !wantsEvent(p.watch, sid)) continue;

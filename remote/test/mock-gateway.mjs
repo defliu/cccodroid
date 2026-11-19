@@ -79,6 +79,108 @@ async function evTo(pid, ev) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── Phase 2 D：权限卡 ──────────────────────────────────────────────
+// 发「perm」触发一张待答的卡片；发「perm timeout」触发一张 1.5 秒后超时的卡片。
+const pendingPerms = new Map();   // id → { sessionId, card }
+let permN = 0;
+
+async function askPerm(pid, sessionId, { expires = false } = {}) {
+  const id = "mock-perm-" + (++permN);
+  const card = {
+    type: "perm_request", id, tool: "Bash",
+    input: { command: "npm run build && rm -rf .cache", description: "构建并清理缓存" },
+    sessionId, runId: "mock-run", at: Date.now(),
+    rules: ["Bash(npm run build:*)"], canAlways: true,
+  };
+  pendingPerms.set(id, { sessionId, card });
+  await evTo(pid, card);
+  if (expires) {
+    setTimeout(() => {
+      if (!pendingPerms.delete(id)) return;
+      evTo(pid, { type: "perm_resolved", id, behavior: "deny", expired: true, sessionId }).catch(() => {});
+    }, 1500);
+  }
+}
+
+// ── Phase 2 E：假文件系统 ──────────────────────────────────────────
+// 1×1 PNG，用来验证 blob 分片 + 图片预览
+const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+const vfs = new Map([
+  ["/work", { dir: true }],
+  ["/work/README.md", { text: "# Mock 工作区\n\n这是 mock 网关给出的假文件。\n\n" + "- 示例条目\n".repeat(40) }],
+  ["/work/src", { dir: true }],
+  ["/work/src/app.js", { text: "export const hello = 'mock';\n".repeat(4000) }],
+  ["/work/notes.txt", { text: "笔记\n".repeat(10) }],
+  ["/work/logo.png", { b64: PNG_B64 }],
+  ["/projects", { dir: true }],
+  ["/projects/s-quant", { dir: true }],
+  ["/projects/s-quant/session.jsonl", { text: "{\"type\":\"user\",\"message\":\"mock\"}\n".repeat(20) }],
+]);
+const ROOTS = [{ name: "工作区（mock）", path: "/work" }, { name: "项目记录（mock）", path: "/projects" }];
+
+function vfsSize(v) {
+  if (!v) return 0;
+  if (v.text != null) return Buffer.byteLength(v.text, "utf8");
+  if (v.b64) return Buffer.from(v.b64, "base64").length;
+  return 0;
+}
+
+function vfsEntries(dir) {
+  const prefix = dir.replace(/\/+$/, "") + "/";
+  const out = new Map();
+  for (const [k, v] of vfs) {
+    if (!k.startsWith(prefix)) continue;
+    const rest = k.slice(prefix.length);
+    if (!rest) continue;
+    const name = rest.split("/")[0];
+    const isDir = rest.includes("/") || !!v.dir;
+    out.set(name, {
+      name, dir: isDir, size: isDir ? 0 : vfsSize(v), mtime: 0,
+      kind: isDir ? "dir" : name.endsWith(".png") ? "image" : "text",
+    });
+  }
+  return [...out.values()].sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name)));
+}
+
+const mockRead = async (pid, cmd) => {
+  const file = String(cmd.path || "");
+  const v = vfs.get(file);
+  if (!v || v.dir) return sendTo(pid, { type: "read", path: file, error: "not found" });
+  if (v.b64) return sendTo(pid, { type: "read", path: file, binary: true, size: vfsSize(v), offset: 0, mime: "image/png", kind: "image" });
+  const buf = Buffer.from(v.text || "", "utf8");
+  const off = Math.max(0, Math.min(buf.length, Number(cmd.offset) || 0));
+  const n = Math.min(48000, buf.length - off);
+  return sendTo(pid, {
+    type: "read", path: file, data: buf.subarray(off, off + n).toString("utf8"),
+    size: buf.length, offset: off, next: off + n, eof: off + n >= buf.length, mime: "text/plain",
+  });
+};
+
+const mockBlob = async (pid, cmd) => {
+  const file = String(cmd.path || "");
+  const v = vfs.get(file);
+  if (!v || v.dir) return sendTo(pid, { type: "blob", path: file, error: "not found" });
+  if (!v.b64) return sendTo(pid, { type: "blob", path: file, error: "not a binary file" });
+  const buf = Buffer.from(v.b64, "base64");
+  const off = Math.max(0, Math.min(buf.length, Number(cmd.offset) || 0));
+  const n = Math.min(90000, buf.length - off);
+  return sendTo(pid, {
+    type: "blob", path: file, mime: "image/png", size: buf.length, offset: off,
+    next: off + n < buf.length ? off + n : null, chunk: buf.subarray(off, off + n).toString("base64"),
+  });
+};
+
+const mockLs = async (pid, cmd) => {
+  const raw = cmd.path == null || cmd.path === "" ? "/work" : String(cmd.path);
+  const dir = raw.replace(/\/+$/, "") || "/";
+  const ok = dir === "/work" || dir === "/projects" || dir.startsWith("/work/") || dir.startsWith("/projects/");
+  if (!ok) return sendTo(pid, { type: "ls", path: "", entries: [], roots: ROOTS, error: "forbidden" });
+  const v = vfs.get(dir);
+  if (!v || !v.dir) return sendTo(pid, { type: "ls", path: dir, entries: [], roots: ROOTS, error: "not found" });
+  const parent = dir === "/work" || dir === "/projects" ? null : dir.replace(/\/[^/]+$/, "");
+  return sendTo(pid, { type: "ls", path: dir, parent, roots: ROOTS, entries: vfsEntries(dir), truncated: false });
+};
+
 async function simulateTurn(pid, sessionId, text) {
   const other = sessionId === "s-quant" ? "s-notes" : "s-quant";
   await evTo(pid, { type: "phase", phase: "text" });
@@ -148,9 +250,37 @@ conn.onmessage = async (ev) => {
       peer.watch = cmd.sessionId || null;
       console.log("watch", m.peerId, peer.watch || "(all)");
       await sendTo(m.peerId, { type: "watching", sessionId: peer.watch });
+      const items = [...pendingPerms.values()]
+        .filter((x) => !peer.watch || !x.sessionId || x.sessionId === peer.watch)
+        .map((x) => x.card);
+      await sendTo(m.peerId, { type: "perms", items });
+    } else if (cmd.cmd === "perm") {
+      const id = String(cmd.id || "");
+      const ent = pendingPerms.get(id);
+      if (!ent) {
+        await sendTo(m.peerId, { type: "perm_ack", id, ok: false, gone: true });
+      } else {
+        pendingPerms.delete(id);
+        console.log("perm", m.peerId, id, cmd.behavior, cmd.always ? "(always)" : "", cmd.interrupt ? "(interrupt)" : "");
+        await sendTo(m.peerId, { type: "perm_ack", id, ok: true });
+        await evTo(m.peerId, {
+          type: "perm_resolved", id, behavior: cmd.behavior === "allow" ? "allow" : "deny",
+          ...(cmd.always ? { always: true } : {}), ...(cmd.interrupt ? { interrupt: true } : {}),
+          sessionId: ent.sessionId,
+        });
+      }
+    } else if (cmd.cmd === "ls") {
+      await mockLs(m.peerId, cmd);
+    } else if (cmd.cmd === "read") {
+      await mockRead(m.peerId, cmd);
+    } else if (cmd.cmd === "blob") {
+      await mockBlob(m.peerId, cmd);
     } else if (cmd.cmd === "send") {
       await sendTo(m.peerId, { type: "queued", id: "mock-" + Date.now(), sessionId: cmd.sessionId || null, injected: false });
-      simulateTurn(m.peerId, cmd.sessionId || "s-quant", String(cmd.text || ""));
+      const text = String(cmd.text || "");
+      // Phase 2 D：发「perm」出一张权限卡，「perm timeout」测超时呈现；其余走正常的流式回复
+      if (/perm/i.test(text)) await askPerm(m.peerId, cmd.sessionId || "s-quant", { expires: /timeout/i.test(text) });
+      else await simulateTurn(m.peerId, cmd.sessionId || "s-quant", text);
     } else if (cmd.cmd === "stop") {
       await sendTo(m.peerId, { type: "stopped", killed: true });
     }

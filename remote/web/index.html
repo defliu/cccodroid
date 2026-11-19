@@ -33,6 +33,47 @@
   .msg.sys { color:var(--dim); font-style:italic; }
   #log .more { display:block; width:100%; margin:0 0 10px; padding:6px 10px; font:inherit; font-size:12px; font-weight:600; background:transparent; border:1px solid var(--line); color:var(--dim); }
   #log .more.hidden { display:none; }
+  /* 权限卡（Phase 2 D）：常驻在输入框上方，滚到历史里也不会看不见 */
+  #perms { margin-top:10px; }
+  .perm { border:1px solid var(--accent); border-radius:10px; background:#1d1613; padding:12px; margin-bottom:10px; }
+  .perm.guard { border-color:#e0a33c; background:#1f1a10; }
+  .perm.done { border-color:var(--line); background:var(--panel); }
+  .perm.busy { opacity:.7; }
+  .perm-head { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--dim); margin-bottom:8px; }
+  .perm-head .perm-kind { color:var(--accent); font-weight:600; }
+  .perm.guard .perm-head .perm-kind { color:#e0a33c; }
+  .perm-tool { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--fg); }
+  .perm-body { margin-bottom:10px; }
+  .perm-cmd, .perm-diff { background:#0d1015; border:1px solid var(--line); border-radius:6px; padding:8px; margin:6px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; }
+  .perm-path { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:#7fb3d5; word-break:break-all; }
+  .perm-sub { color:var(--dim); font-size:12px; margin-top:6px; }
+  .perm-acts { display:flex; flex-wrap:wrap; gap:8px; }
+  .perm-acts button { padding:8px 12px; font-size:13px; }
+  .perm-acts button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  .perm-acts button.bad { background:var(--bad); }
+  .perm-q { margin:8px 0; }
+  .perm-qt { font-size:13px; margin-bottom:6px; }
+  .perm-opt { display:flex; gap:8px; align-items:flex-start; padding:6px 8px; border:1px solid var(--line); border-radius:6px; margin-bottom:6px; text-transform:none; letter-spacing:0; color:var(--fg); font-size:13px; }
+  .perm-opt input { width:auto; margin-top:3px; }
+  .perm-opt small { display:block; color:var(--dim); }
+  .perm-other, .perm-deny-msg { margin-top:6px; }
+  .perm-res { font-size:13px; font-weight:600; color:var(--dim); }
+  .perm.done.ok .perm-res { color:var(--ok); }
+  .perm.done.no .perm-res { color:var(--bad); }
+  #perms .perm-note { font-size:12px; color:var(--accent); margin-bottom:8px; }
+  /* 文件浏览（Phase 2 E） */
+  .filelist { margin-top:10px; max-height:38vh; overflow:auto; border:1px solid var(--line); border-radius:8px; }
+  .frow { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .frow:last-child { border-bottom:0; }
+  .frow:hover { background:#1a1f28; }
+  .frow .fname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .frow .fmeta { color:var(--dim); font-size:12px; flex:none; }
+  .frow.dir .fname { color:#7fb3d5; }
+  .frow.plain { cursor:default; color:var(--dim); }
+  #fView { margin-top:10px; }
+  #fView pre { max-height:45vh; overflow:auto; }
+  #fView img { max-width:100%; border-radius:8px; display:block; margin-top:8px; }
+  #fView a.fdl { display:inline-block; margin-top:8px; color:var(--accent); }
   .composer { display:flex; gap:8px; margin-top:10px; }
   .composer input { flex:1; }
   .hint { color:var(--dim); font-size:12px; margin-top:8px; }
@@ -67,12 +108,25 @@
         <option value="">新会话</option>
       </select>
       <button id="refresh" class="ghost" disabled>刷新</button>
+      <button id="files" class="ghost" disabled>文件</button>
       <button id="stop" class="ghost" disabled>停止</button>
     </div>
   </section>
 
+  <section class="card hidden" id="filesCard">
+    <div id="fPath" class="perm-path">（未打开）</div>
+    <div class="row" style="margin-top:8px">
+      <button id="fUp" class="ghost" disabled>上一级</button>
+      <select id="fRootSel"></select>
+      <button id="fClose" class="ghost">关闭</button>
+    </div>
+    <div id="fList" class="filelist"></div>
+    <div id="fView" class="hidden"></div>
+  </section>
+
   <section class="card">
     <div id="log"></div>
+    <div id="perms" class="hidden"></div>
     <div class="composer">
       <input id="text" placeholder="输入消息…" autocomplete="off" disabled />
       <button id="send" disabled>发送</button>
