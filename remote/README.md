@@ -24,6 +24,7 @@ phone gateway (gw/remote.mjs) ──WSS──▶ relay (remote/relay) ◀──W
 | `test/mock-gateway.mjs` | Mock gateway bridge (multi-peer + `watch`) for browser-side integration testing |
 | `test/demo-agent.mjs` | Manual demo agent (opens a room, echoes messages) |
 | `phase1-test-report.md` | 9.1 联调记录（缺陷、清单结果、遗留项） |
+| `phase2-acceptance.md` | Phase 2 A/B 验收记录：测试、mock 过滤、双设备联调、Android 真机清单 |
 
 Gateway side (not in this dir):
 
