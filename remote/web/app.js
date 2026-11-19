@@ -95,8 +95,10 @@ function renderSessions(list, keep = true) {
     o.textContent = `${s.title || s.id.slice(0, 8)}${s.current ? " · 当前" : ""}${when ? " · " + when : ""}`;
     ui.session.appendChild(o);
   }
+  // 「新会话」是用户明确的选择（watch = null）。列表刷新不能被「当前项目」的会话顶掉，
+  // 否则筛选会在用户没动下拉框的情况下自己变严。只有首次拿到列表（keep=false）才自动选一个。
   if (prev && [...ui.session.options].some((o) => o.value === prev)) ui.session.value = prev;
-  else {
+  else if (!keep) {
     const cur = state.sessions.find((s) => s.current);
     if (cur) ui.session.value = cur.id;
   }
