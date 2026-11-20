@@ -209,7 +209,7 @@ server.listen(CFG.port, "127.0.0.1", () => {
   log(`  密钥   ${API_KEY ? "已配置" : "缺失"}`);
   log(`  模型   ${SETTINGS.model}   权限 ${SETTINGS.permissionMode}`);
   if (!fs.existsSync(PATHS.claude)) log(`  ⚠️ 未找到 claude: ${PATHS.claude}`);
-  if (!fs.existsSync(PATHS.loader)) log(`  ⚠️ 未找到 glibc loader: ${PATHS.loader}`);
+  if (process.platform !== "win32" && !fs.existsSync(PATHS.loader)) log(`  ⚠️ 未找到 glibc loader: ${PATHS.loader}`);
   if (process.env.CCAPP_EXEC === "loader") {
     // 经加载器（targetSdk 36）：APK 里的 ld.so 必须和工具包里的 libc 同版本，不同就是 APK 先升了、工具包还没跟上
     let same = false;

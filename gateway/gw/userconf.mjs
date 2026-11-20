@@ -376,7 +376,11 @@ export function ucKeep(rels, ticket) {
     const cur = ucScan();
     if (ticket && ticket.h) for (const rel of set) {
       const s = SEEN.get(rel);
-      if ((cur.get(rel)?.h ?? null) !== (Object.hasOwn(ticket.h, rel) ? ticket.h[rel] : undefined) || (s && (s.last || s.at) > ticket.at)) stale.push(rel);
+      const th = Object.hasOwn(ticket.h, rel) ? ticket.h[rel] : undefined;
+      // 卡片之后监视器有过动静，但看见的就是卡片上那一版（第一次核对时插件目录太大，监视器还在追）：
+      // 不算又被改了，否则用户点了「保留」也永远过不去
+      const seenDiff = !!s && (s.f ? s.f.h : null) !== th;
+      if ((cur.get(rel)?.h ?? null) !== th || seenDiff) stale.push(rel);
     }
     for (const rel of stale) set.delete(rel);
     accept(cur, (rel) => set.has(rel));

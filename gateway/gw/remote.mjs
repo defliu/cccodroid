@@ -393,18 +393,20 @@ async function connect() {
   pairKey = await P.pairKeyFromCode(state.code);
   const codeHash = await P.sha256Hex(P.normalizeCode(state.code));
   log(`[remote] 连接中继 ${state.relay}`);
-  ws = connectWs(state.relay, {
+  // 回调里认人：重开连接后旧 socket 的 onClose 还会来，不能让它把新连接抹掉
+  const sock = connectWs(state.relay, {
     onOpen: () => {
-      if (!ws) return;
-      ws.send(JSON.stringify({ t: "open", room: state.room, codeHash, label: "cccroid" }));
+      if (ws !== sock) return;
+      sock.send(JSON.stringify({ t: "open", room: state.room, codeHash, label: "cccroid" }));
     },
     onMessage: (raw) => {
+      if (ws !== sock) return;
       let msg;
       try { msg = JSON.parse(raw); } catch { return; }
       handleRelay(msg);
     },
     onClose: () => {
-      if (!ws) return;
+      if (ws !== sock) return;
       ws = null;
       peers.clear();
       lastPeer = null;
@@ -413,6 +415,16 @@ async function connect() {
     },
     onError: (e) => log(`[remote] 连接错误: ${e.message || e}`),
   });
+  ws = sock;
+}
+/** 丢掉当前中继连接（同步清空 ws，旧 socket 的迟来回调由 connect() 里的认人检查挡掉） */
+function dropSocket() {
+  if (!ws) return;
+  const old = ws;
+  ws = null;
+  peers.clear();
+  lastPeer = null;
+  try { old.close(); } catch {}
 }
 
 function scheduleReconnect() {
@@ -427,14 +439,19 @@ function scheduleReconnect() {
 }
 
 export async function enableRemote({ relay, newCode = false } = {}) {
-  if (relay && /^wss?:\/\//.test(String(relay))) state.relay = String(relay);
+  const next = relay && /^wss?:\/\//.test(String(relay)) ? String(relay) : state.relay;
+  // 中继或房间/配对码变了，旧连接上登记的还是旧房间：必须断开重连，否则界面报 no-room
+  let changed = next !== state.relay;
+  state.relay = next;
   if (newCode || !state.room || !state.code) {
     state.room = crypto.randomBytes(16).toString("hex");
     state.code = P.randomCode();
     state.createdAt = Date.now();
+    changed = true;
   }
   state.enabled = true;
   saveState();
+  if (changed) dropSocket();
   if (!ws) await connect();
   log(`[remote] 配对链接: ${pairingUrl()}`);
   return remoteStatus();
@@ -444,13 +461,7 @@ export function disableRemote() {
   state.enabled = false;
   saveState();
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-  if (ws) {
-    const old = ws;
-    ws = null;
-    try { old.close(); } catch {}
-  }
-  peers.clear();
-  lastPeer = null;
+  dropSocket();
   log("[remote] 已停用");
   return remoteStatus();
 }
