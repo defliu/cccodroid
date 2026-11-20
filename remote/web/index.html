@@ -1,137 +1,415 @@
 <!doctype html>
 <html lang="zh-CN">
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>cccodroid remote</title>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#1f1e1d">
+<title>cccodroid</title>
 <style>
-  :root { color-scheme: dark light; --bg:#0f1115; --panel:#171a21; --line:#2a303c; --fg:#e7ebf3; --dim:#8a93a6; --accent:#c96442; --ok:#3fbf7f; --bad:#e05c5c; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial; }
-  main { max-width:760px; margin:0 auto; padding:24px 16px 40px; }
-  h1 { font-size:18px; margin:0 0 4px; letter-spacing:.2px; }
-  .sub { color:var(--dim); font-size:13px; margin-bottom:20px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
-  label { display:block; font-size:12px; color:var(--dim); margin:10px 0 6px; letter-spacing:.4px; text-transform:uppercase; }
-  input, select { width:100%; background:#0d1015; color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:inherit; }
-  input.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:1px; }
-  select { min-width:0; }
-  .msg.think { color:#8a93a6; font-style:italic; }
-  .msg.tool { color:#7fb3d5; }
-  .row { display:flex; gap:10px; }
-  .row > * { flex:1; }
-  button { border:0; border-radius:8px; padding:10px 14px; font:inherit; font-weight:600; background:var(--accent); color:#fff; cursor:pointer; }
-  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
-  button:disabled { opacity:.45; cursor:default; }
-  .status { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--dim); }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--dim); }
-  .dot.ok { background:var(--ok); box-shadow:0 0 8px var(--ok); }
-  .dot.bad { background:var(--bad); }
-  #log { min-height:220px; max-height:52vh; overflow:auto; background:#0d1015; border:1px solid var(--line); border-radius:8px; padding:12px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px; white-space:pre-wrap; }
-  .msg { margin:0 0 8px; }
-  .msg.me { color:#f0b8a5; }
-  .msg.them { color:var(--fg); }
-  .msg.sys { color:var(--dim); font-style:italic; }
-  #log .more { display:block; width:100%; margin:0 0 10px; padding:6px 10px; font:inherit; font-size:12px; font-weight:600; background:transparent; border:1px solid var(--line); color:var(--dim); }
-  #log .more.hidden { display:none; }
-  /* 权限卡（Phase 2 D）：常驻在输入框上方，滚到历史里也不会看不见 */
-  #perms { margin-top:10px; }
-  .perm { border:1px solid var(--accent); border-radius:10px; background:#1d1613; padding:12px; margin-bottom:10px; }
-  .perm.guard { border-color:#e0a33c; background:#1f1a10; }
-  .perm.done { border-color:var(--line); background:var(--panel); }
-  .perm.busy { opacity:.7; }
-  .perm-head { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--dim); margin-bottom:8px; }
-  .perm-head .perm-kind { color:var(--accent); font-weight:600; }
-  .perm.guard .perm-head .perm-kind { color:#e0a33c; }
-  .perm-tool { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; color:var(--fg); }
-  .perm-body { margin-bottom:10px; }
-  .perm-cmd, .perm-diff { background:#0d1015; border:1px solid var(--line); border-radius:6px; padding:8px; margin:6px 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; }
-  .perm-path { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:#7fb3d5; word-break:break-all; }
-  .perm-sub { color:var(--dim); font-size:12px; margin-top:6px; }
-  .perm-acts { display:flex; flex-wrap:wrap; gap:8px; }
-  .perm-acts button { padding:8px 12px; font-size:13px; }
-  .perm-acts button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
-  .perm-acts button.bad { background:var(--bad); }
-  .perm-q { margin:8px 0; }
-  .perm-qt { font-size:13px; margin-bottom:6px; }
-  .perm-opt { display:flex; gap:8px; align-items:flex-start; padding:6px 8px; border:1px solid var(--line); border-radius:6px; margin-bottom:6px; text-transform:none; letter-spacing:0; color:var(--fg); font-size:13px; }
-  .perm-opt input { width:auto; margin-top:3px; }
-  .perm-opt small { display:block; color:var(--dim); }
-  .perm-other, .perm-deny-msg { margin-top:6px; }
-  .perm-res { font-size:13px; font-weight:600; color:var(--dim); }
-  .perm.done.ok .perm-res { color:var(--ok); }
-  .perm.done.no .perm-res { color:var(--bad); }
-  #perms .perm-note { font-size:12px; color:var(--accent); margin-bottom:8px; }
-  /* 文件浏览（Phase 2 E） */
-  .filelist { margin-top:10px; max-height:38vh; overflow:auto; border:1px solid var(--line); border-radius:8px; }
-  .frow { display:flex; gap:8px; align-items:center; padding:8px 10px; border-bottom:1px solid var(--line); cursor:pointer; }
-  .frow:last-child { border-bottom:0; }
-  .frow:hover { background:#1a1f28; }
-  .frow .fname { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .frow .fmeta { color:var(--dim); font-size:12px; flex:none; }
-  .frow.dir .fname { color:#7fb3d5; }
-  .frow.plain { cursor:default; color:var(--dim); }
-  #fView { margin-top:10px; }
-  #fView pre { max-height:45vh; overflow:auto; }
-  #fView img { max-width:100%; border-radius:8px; display:block; margin-top:8px; }
-  #fView a.fdl { display:inline-block; margin-top:8px; color:var(--accent); }
-  .composer { display:flex; gap:8px; margin-top:10px; }
-  .composer input { flex:1; }
-  .hint { color:var(--dim); font-size:12px; margin-top:8px; }
-  .hidden { display:none; }
+/* 和主 APP（gateway/web/style.css）同一套暖中性色和组件样式：顶栏 / 抽屉 / 消息区 / 输入区。
+   遥控端只带这一页，字体用系统等宽，不加载主 APP 的 CC Mono。 */
+:root{
+  --bg:#1f1e1d; --bg2:#262624; --bg3:#2f2e2b; --bg4:#383732; --line:#3a3935;
+  --fg:#ece9e1; --fg2:#aaa59b; --fg3:#7f7a70;
+  --accent:#d97757; --accent-dim:#a85a3f;
+  --ok:#7fb069; --err:#e5675a; --warn:#d6a24a; --tool:#8fb0d4; --purple:#b49ae0;
+  --bar-bg:#1f1e1d; --bar-bg2:#1f1e1d;
+  --strong:#fffdf8; --code-bg:#191817;
+  --user-bg:#2f2e2b; --user-line:#2f2e2b; --sys-bg:#29262e; --sys-line:#3b3644;
+  --err-bg:#311d1a; --err-line:#6b3229; --err-fg:#f3b1a6; --active-bg:#2c221d;
+  --shadow:rgba(0,0,0,.5); --scrim:rgba(0,0,0,.5);
+  --accent-btn:#b4553a; --on-accent:#fff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Noto Sans Mono CJK SC",monospace;
+  color-scheme:dark;
+  --radius:14px;
+  --safe-b:env(safe-area-inset-bottom,0px);
+  --safe-t:env(safe-area-inset-top,0px);
+  --safe-tt:max(calc(var(--safe-t) - 6px),0px);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{accent-color:var(--accent);overflow:hidden}
+html,body{height:100%;margin:0;overscroll-behavior:none}
+body{
+  background:var(--bg);color:var(--fg);display:flex;flex-direction:column;overflow:clip;
+  font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+}
+.hidden{display:none !important}
+.mono{font-family:var(--mono)}
+
+/* ── 顶栏 ── */
+#topbar{
+  display:flex;align-items:center;gap:6px;
+  padding:var(--safe-tt) 10px 2px;
+  background:var(--bar-bg);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20;
+}
+#title-block{flex:1;min-width:0}
+#app-title{font-weight:600;font-size:15px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sub-title{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--fg3);white-space:nowrap;overflow:hidden}
+#sub-title .dot{flex:none}
+#state{overflow:hidden;text-overflow:ellipsis}
+#state.ok{color:var(--ok)} #state.bad{color:var(--err)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--fg3)}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--err)}
+.icon-btn{
+  width:38px;height:38px;flex:0 0 38px;display:grid;place-items:center;
+  background:transparent;border:1px solid transparent;border-radius:10px;color:var(--fg2);
+}
+.icon-btn:active{background:var(--bg3);color:var(--fg)}
+.icon-btn:disabled{opacity:.35}
+.icon-btn svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.icon-btn.sm{width:32px;height:32px;flex:0 0 32px}
+.icon-btn.sm svg{width:17px;height:17px}
+@media (max-width:420px){
+  #topbar{gap:2px;padding-left:6px;padding-right:6px}
+  #topbar .icon-btn{width:34px;flex-basis:34px}
+}
+#topbar,#topbar *,#composer,#composer *,#drawer,#drawer *,#pages button,#pages button *,
+#chat .msg button{-webkit-user-select:none;user-select:none}
+input,textarea{-webkit-user-select:text;user-select:text}
+
+/* ── 消息区 ── */
+#chat{flex:1;overflow-y:auto;padding:14px 12px 8px;-webkit-overflow-scrolling:touch}
+#chat .msg{max-width:900px;margin:0 auto 14px;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.bubble{
+  background:var(--bg2);border:1px solid var(--line);border-radius:var(--radius);
+  padding:11px 13px;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;
+}
+.msg.bot .bubble{background:none;border:0;border-radius:0;padding:0 1px}
+.msg.user{display:flex;flex-direction:column;align-items:flex-end}
+.msg.user .bubble{background:var(--user-bg);border-color:var(--user-line);border-radius:18px;max-width:min(85%,680px);padding:9px 14px}
+.msg.sys .bubble{background:var(--sys-bg);border-color:var(--sys-line);font-size:13px;color:var(--fg2);padding:7px 11px}
+.msg.tool .bubble,.msg.think .bubble{background:none;border:0;padding:0 1px;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:var(--tool)}
+.msg.think .bubble{color:var(--fg3);font-style:italic}
+/* 正文里的 Markdown（app.js renderMd）：标题 / 列表 / 引用 / 代码块 / 表格 */
+.bubble p{margin:0 0 10px}
+.bubble p:last-child{margin-bottom:0}
+.bubble h2,.bubble h3,.bubble h4{margin:16px 0 8px;line-height:1.35;font-weight:650;color:var(--strong)}
+.bubble h2{font-size:18px} .bubble h3{font-size:16.5px} .bubble h4{font-size:15.5px}
+.bubble h2:first-child,.bubble h3:first-child,.bubble h4:first-child{margin-top:0}
+.bubble ul,.bubble ol{margin:6px 0;padding-left:21px}
+.bubble li{margin:3px 0}
+.bubble a{color:var(--tool);text-decoration-color:rgba(143,176,212,.4);text-underline-offset:2px}
+.bubble strong{color:var(--strong);font-weight:600}
+.bubble hr{border:0;border-top:1px solid var(--line);margin:12px 0}
+.bubble blockquote{margin:8px 0;padding:2px 0 2px 12px;border-left:3px solid var(--accent-dim);color:var(--fg2)}
+.bubble code{font-family:var(--mono);font-size:12.5px;background:var(--bg3);border-radius:5px;padding:1px 5px}
+.bubble .code-wrap{position:relative;margin:8px 0;background:var(--code-bg);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.bubble .code-lang{font-family:var(--mono);font-size:10.5px;color:var(--fg3);padding:5px 10px 0}
+.bubble .code-wrap pre{margin:0;padding:8px 10px 10px;overflow:auto;max-height:60vh;font-family:var(--mono);font-size:12.5px;line-height:1.55;white-space:pre}
+.bubble .code-wrap pre code{background:none;border:0;padding:0;font-size:inherit}
+.bubble .tbl-wrap{overflow-x:auto;margin:8px 0}
+.bubble table{border-collapse:collapse;font-size:13px}
+.bubble th,.bubble td{border:1px solid var(--line);padding:4px 8px;text-align:left}
+.bubble th{background:var(--bg2);font-weight:600}
+#chat .more{
+  display:block;width:100%;margin:0 auto 12px;padding:6px 10px;
+  background:transparent;border:1px solid var(--line);border-radius:9px;
+  color:var(--fg3);font:inherit;font-size:12px;
+}
+
+/* ── 输入区 ── */
+#composer{
+  border-top:1px solid var(--line);background:var(--bar-bg2);
+  padding:8px 10px calc(var(--safe-b) + 8px);flex:none;position:relative;z-index:10;
+}
+#perms{max-width:900px;margin:0 auto 6px;display:flex;flex-direction:column;gap:6px}
+#composer-inner{
+  display:flex;align-items:flex-end;gap:6px;max-width:900px;margin:0 auto;
+  background:var(--bg2);border:1px solid var(--line);border-radius:22px;box-shadow:0 1px 6px var(--shadow);
+  padding:5px 5px 5px 12px;transition:border-color .15s;
+}
+#composer-inner:focus-within{border-color:var(--accent-dim)}
+#text{
+  flex:1;background:transparent;border:0;outline:0;color:var(--fg);
+  font:inherit;font-size:15.5px;resize:none;max-height:180px;padding:8px 0;line-height:1.45;
+}
+#text::placeholder{color:var(--fg3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#send{
+  width:38px;height:38px;flex:0 0 38px;border:0;border-radius:50%;
+  background:var(--accent);color:var(--on-accent);display:grid;place-items:center;transition:opacity .15s;
+}
+#send:disabled{opacity:.35}
+#send svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#send .ico-stop{display:none}
+#send.busy .ico-send{display:none} #send.busy .ico-stop{display:block}
+#hint-row{display:flex;gap:9px;justify-content:center;max-width:900px;margin:5px auto 0;font-size:10.5px;color:var(--fg3);flex-wrap:wrap}
+#sess-chip{max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg2);cursor:pointer;border-bottom:1px dotted var(--fg3)}
+#stat-chip{color:var(--accent)}
+
+/* ── 权限确认卡 ── */
+.perm{border:1px solid var(--warn);border-radius:10px;background:var(--bg2);overflow:hidden}
+.perm.guard{border-color:var(--err)}
+.perm.busy{opacity:.6;pointer-events:none}
+.perm-head{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12.5px;flex-wrap:wrap}
+.perm-kind{color:var(--warn);font-weight:600}
+.perm.guard .perm-kind{color:var(--err)}
+.perm-tool{color:var(--tool);font-family:var(--mono);font-size:12px}
+.perm-body{padding:0 10px 4px}
+.perm-cmd,.perm-diff{
+  background:var(--code-bg);border:1px solid var(--line);border-radius:8px;padding:8px;
+  margin:0 0 6px;max-height:260px;overflow:auto;
+  font-family:var(--mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;
+}
+.perm-path{font-family:var(--mono);font-size:11.5px;color:var(--fg2);margin:2px 0 4px;overflow-wrap:anywhere}
+.perm-sub{font-size:11.5px;color:var(--fg3);margin:2px 0 4px;overflow-wrap:anywhere}
+.perm-q{margin:4px 0 10px}
+.perm-qt{font-weight:600;margin-bottom:6px;font-size:13px}
+.perm-opt{display:flex;gap:8px;align-items:flex-start;padding:6px 8px;border:1px solid var(--line);border-radius:8px;cursor:pointer;margin-bottom:5px;font-size:13px}
+.perm-opt input{margin-top:4px}
+.perm-opt small{display:block;color:var(--fg3);font-size:11.5px}
+.perm-other,.perm-deny-msg{
+  width:100%;box-sizing:border-box;margin-top:6px;background:var(--bg);color:var(--fg);
+  border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-size:13px;
+}
+.perm-acts{display:flex;flex-wrap:wrap;gap:6px;padding:4px 10px 10px}
+.perm-acts button{
+  background:var(--accent-btn);border:1px solid var(--accent-btn);color:var(--on-accent);
+  border-radius:8px;padding:5px 11px;font-size:12.5px;flex:0 0 auto;
+}
+.perm-acts button.ghost{background:var(--bg3);border-color:var(--line);color:var(--fg)}
+.perm-acts button.bad{background:var(--err);border-color:var(--err);color:#fff}
+.perm.done{border-color:var(--line);background:transparent}
+.perm.done .perm-head{color:var(--fg3)}
+.perm-res{padding:0 10px 8px;font-size:12.5px;color:var(--fg2)}
+.perm.done.ok .perm-res{color:var(--ok)} .perm.done.no .perm-res{color:var(--err)}
+
+/* ── 抽屉：新对话 / 文件 / 设置 / 最近的对话 / 账户行 ── */
+#drawer{position:fixed;inset:0;z-index:50;background:var(--scrim);backdrop-filter:blur(2px)}
+.drawer-panel{
+  position:absolute;top:0;left:0;bottom:0;width:min(340px,86vw);
+  background:var(--bg2);border-right:1px solid var(--line);
+  padding:calc(var(--safe-t) + 10px) 10px 0;display:flex;flex-direction:column;
+  overflow:hidden;animation:slide .2s ease;
+}
+@keyframes slide{from{transform:translateX(-100%)}to{transform:none}}
+.side-head{display:flex;align-items:center;gap:8px;padding:0 4px 8px;flex:none}
+.side-brand{flex:1;min-width:0;font-weight:600;font-size:15px;letter-spacing:.2px;display:flex;align-items:center;gap:8px}
+.side-brand span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side-brand::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none}
+.drawer-panel svg{fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
+.side-new{
+  display:flex;align-items:center;gap:10px;width:100%;padding:9px 12px;margin-bottom:6px;border-radius:11px;
+  background:var(--bg);border:1px solid var(--line);color:var(--fg);font:inherit;font-size:14px;font-weight:500;flex:none;
+}
+.side-new:active{border-color:var(--accent-dim)}
+.side-new svg{width:18px;height:18px;color:var(--accent);stroke-width:2.2}
+.side-scroll{flex:1;min-height:0;display:flex;flex-direction:column}
+.side-nav{display:flex;flex-direction:column;gap:1px;padding:0 0 6px;flex:none}
+.nav-item{
+  display:flex;align-items:center;gap:11px;width:100%;padding:7px 12px;border-radius:9px;
+  background:none;border:0;color:var(--fg2);font:inherit;font-size:14px;text-align:start;
+}
+.nav-item:active{background:var(--bg3);color:var(--fg)}
+.nav-item:disabled{opacity:.4}
+.nav-item svg{width:18px;height:18px;flex:none;stroke-width:1.9}
+.nav-item span{flex:1;min-width:0}
+.side-recent{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;margin:0 -10px;padding:0 10px 8px}
+.side-recent h4{margin:12px 12px 3px;font-size:11.5px;font-weight:600;color:var(--fg3);letter-spacing:.4px}
+.side-recent h4:first-child{margin-top:4px}
+.sr-item{
+  display:flex;align-items:center;gap:7px;width:100%;padding:6px 12px;border:0;border-radius:9px;background:none;color:var(--fg);
+  font:inherit;font-size:14px;text-align:start;
+}
+.sr-item span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sr-item:active{background:var(--bg3)}
+.sr-item.on{background:var(--bg4);font-weight:500}
+.sr-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--ok)}
+.sr-empty{padding:10px 12px;color:var(--fg3);font-size:13px}
+.side-acct{
+  position:sticky;bottom:0;display:flex;align-items:center;gap:10px;margin:8px -10px 0;padding:10px 14px calc(var(--safe-b) + 10px);
+  background:var(--bg2);border:0;border-top:1px solid var(--line);color:var(--fg2);font:inherit;text-align:start;flex:none;
+}
+.side-acct:active{color:var(--fg)}
+.side-acct>svg{width:18px;height:18px;flex:none}
+.acct-av{width:30px;height:30px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--accent-btn);color:var(--on-accent);font-weight:600;font-size:14px}
+.acct-txt{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.35}
+.acct-txt b{font-weight:500;font-size:14px;color:var(--fg)}
+.acct-txt small{font-size:11.5px;color:var(--fg3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── 整页：设置 / 文件 ── */
+#pages{position:fixed;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column;padding-top:var(--safe-t)}
+.page{flex:1;display:flex;flex-direction:column;min-height:0}
+.page-head{
+  display:flex;align-items:center;gap:6px;padding:6px 10px 2px;flex:none;min-height:46px;
+  background:var(--bar-bg);border-bottom:1px solid var(--line);
+}
+.page-head h2{font-size:15px;font-weight:600;margin:0;flex:1;letter-spacing:.2px}
+.page-body{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 14px calc(var(--safe-b) + 24px)}
+.set-card{
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--bg2);
+  padding:14px;margin:0 auto 14px;max-width:760px;
+}
+.set-status{display:flex;align-items:center;gap:8px;font-size:14px;margin-bottom:2px}
+.set-label{display:block;font-size:12px;color:var(--fg2);font-weight:600;margin-bottom:8px}
+.set-sub{font-size:12px;color:var(--fg3);margin-top:4px;overflow-wrap:anywhere}
+.set-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.btn{
+  background:var(--accent-btn);border:1px solid var(--accent-btn);color:var(--on-accent);
+  border-radius:9px;padding:8px 14px;font:inherit;font-size:13.5px;font-weight:600;
+}
+.btn.ghost{background:transparent;border-color:var(--line);color:var(--fg)}
+.btn:disabled{opacity:.4}
+#page-settings input{
+  width:100%;background:var(--bg);border:1px solid var(--line);border-radius:9px;
+  color:var(--fg);padding:9px 11px;font:inherit;font-size:14px;outline:0;margin-bottom:8px;
+}
+#page-settings input:focus{border-color:var(--accent-dim)}
+#page-settings input.mono{font-family:var(--mono);letter-spacing:.6px}
+#page-settings input:disabled{opacity:.55}
+.files-bar{display:flex;gap:8px;align-items:center;margin-bottom:8px;max-width:900px;margin-left:auto;margin-right:auto}
+.files-bar select{
+  flex:1;min-width:0;background:var(--bg2);color:var(--fg);border:1px solid var(--line);
+  border-radius:8px;padding:6px 8px;font:inherit;font-size:13px;
+}
+#fPath{max-width:900px;margin-left:auto;margin-right:auto}
+.filelist{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--bg2);max-width:900px;margin:0 auto}
+.frow{display:flex;gap:8px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer;font-size:14px}
+.frow:last-child{border-bottom:0}
+.frow:active{background:var(--bg3)}
+.frow .fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .fmeta{color:var(--fg3);font-size:11.5px;flex:none}
+.frow.dir .fname{color:var(--tool)}
+.frow.plain{cursor:default;color:var(--fg3)}
+#fView{margin-top:12px;max-width:900px;margin-left:auto;margin-right:auto}
+#fView pre.perm-cmd{max-height:55vh}
+#fView img{max-width:100%;border-radius:10px;display:block;margin-top:8px}
+#fView a.fdl{display:inline-block;margin-top:8px;color:var(--accent)}
 </style>
-<main>
-  <h1>cccodroid remote</h1>
-  <div class="sub">端到端加密的远程通道 · 中继只转发密文</div>
+</head>
+<body>
 
-  <section class="card" id="pairCard">
-    <div class="row">
-      <div>
-        <label>房间</label>
-        <input id="room" class="mono" placeholder="16 位十六进制" autocomplete="off" spellcheck="false" />
+<!-- ── 顶栏 ── -->
+<header id="topbar">
+  <button id="btn-menu" class="icon-btn" aria-label="会话与设置">
+    <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+  </button>
+  <div id="title-block">
+    <div id="app-title">cccodroid</div>
+    <div id="sub-title"><span id="dot" class="dot"></span><span id="state">未连接</span></div>
+  </div>
+  <button id="files" class="icon-btn" aria-label="文件浏览器" title="文件浏览器" disabled>
+    <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+  </button>
+  <button id="refresh" class="icon-btn" aria-label="刷新会话" title="刷新会话" disabled>
+    <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.1"/><path d="M20 5v6h-6"/></svg>
+  </button>
+  <button id="btn-settings" class="icon-btn" aria-label="设置" title="设置">
+    <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+  </button>
+</header>
+
+<!-- ── 消息区 ── -->
+<main id="chat"></main>
+
+<!-- ── 输入区 ── -->
+<div id="composer">
+  <div id="perms" class="hidden"></div>
+  <div id="composer-inner">
+    <textarea id="text" rows="1" dir="auto" placeholder="给 Claude 发消息…" autocomplete="off" spellcheck="false" disabled></textarea>
+    <button id="send" aria-label="发送" disabled>
+      <svg viewBox="0 0 24 24" class="ico-send"><path d="M4 12l16-8-6 16-3-6-7-2z"/></svg>
+      <svg viewBox="0 0 24 24" class="ico-stop"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
+  </div>
+  <div id="hint-row">
+    <span id="sess-chip">新对话</span>
+    <span id="stat-chip"></span>
+  </div>
+</div>
+
+<!-- ── 抽屉：新对话 / 文件 / 设置 / 最近的对话 ── -->
+<aside id="drawer" class="hidden">
+  <div class="drawer-panel">
+    <div class="side-head">
+      <div class="side-brand"><span>cccodroid</span></div>
+      <button id="btn-close-drawer" class="icon-btn sm" aria-label="收起侧栏" title="收起侧栏">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <button id="side-new" class="side-new">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>新对话</span>
+    </button>
+    <div id="side-scroll" class="side-scroll">
+      <nav id="side-nav" class="side-nav">
+        <button id="nav-files" class="nav-item" disabled>
+          <svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span>文件浏览器</span>
+        </button>
+        <button id="nav-settings" class="nav-item">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+          <span>设置</span>
+        </button>
+      </nav>
+      <div id="side-recent" class="side-recent"></div>
+    </div>
+    <button id="side-acct" class="side-acct">
+      <span class="acct-av">C</span>
+      <span class="acct-txt"><b>设置</b><small id="acct-sub">未连接</small></span>
+      <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+    </button>
+  </div>
+</aside>
+
+<!-- ── 整页：设置 / 文件 ── -->
+<div id="pages" class="hidden">
+  <section id="page-settings" class="page hidden">
+    <div class="page-head">
+      <button class="icon-btn back" data-back aria-label="返回">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h2>设置</h2>
+    </div>
+    <div class="page-body">
+      <div class="set-card">
+        <div class="set-status"><span class="dot" id="set-dot"></span><span id="set-state">未连接</span></div>
+        <div class="set-sub" id="set-relay">中继：—</div>
+        <div class="set-sub" id="set-sess">会话：新对话</div>
+        <div class="set-acts">
+          <button id="connect" class="btn">连接</button>
+          <button id="disconnect" class="btn ghost" disabled>断开</button>
+          <button id="set-refresh" class="btn ghost" disabled>刷新会话</button>
+        </div>
       </div>
-      <div>
-        <label>配对码</label>
-        <input id="code" class="mono" placeholder="26 位配对码" autocomplete="off" spellcheck="false" />
+      <div class="set-card">
+        <label class="set-label" for="room">配对</label>
+        <input id="room" class="mono" placeholder="房间号（16 位十六进制）" autocomplete="off" spellcheck="false">
+        <input id="code" class="mono" placeholder="26 位配对码" autocomplete="off" spellcheck="false">
+        <div class="set-sub">在电脑的 cccodroid「设置 → 远程控制」里生成配对码或复制配对链接。配对链接就是这个 App 的钥匙，别发给别人。</div>
+      </div>
+      <div class="set-card">
+        <label class="set-label">关于</label>
+        <div class="set-sub">cccodroid 遥控端：手机只做客户端，Claude Code 跑在电脑上。</div>
+        <div class="set-sub">通道端到端加密（AES-256-GCM），中继只转发密文。</div>
       </div>
     </div>
-    <div class="row" style="margin-top:12px">
-      <button id="connect">连接</button>
-      <button id="disconnect" class="ghost" disabled>断开</button>
-    </div>
-    <div class="hint">在 cccodroid 里生成配对码；也可以用带 #room=…&amp;code=… 的链接直接打开。</div>
   </section>
 
-  <section class="card">
-    <div class="status"><span class="dot" id="dot"></span><span id="state">未连接</span></div>
-    <div class="row" style="margin-top:10px">
-      <select id="session" disabled>
-        <option value="">新会话</option>
-      </select>
-      <button id="refresh" class="ghost" disabled>刷新</button>
-      <button id="files" class="ghost" disabled>文件</button>
-      <button id="stop" class="ghost" disabled>停止</button>
+  <section id="page-files" class="page hidden">
+    <div class="page-head">
+      <button class="icon-btn back" data-back aria-label="返回">
+        <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <h2>文件</h2>
+      <button id="fClose" class="icon-btn" aria-label="关闭" title="关闭">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="page-body">
+      <div class="files-bar">
+        <button id="fUp" class="icon-btn sm" aria-label="上一级" title="上一级" disabled>
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        </button>
+        <select id="fRootSel"><option value="">目录…</option></select>
+      </div>
+      <div id="fPath" class="perm-path">（未打开）</div>
+      <div id="fList" class="filelist"></div>
+      <div id="fView" class="hidden"></div>
     </div>
   </section>
+</div>
 
-  <section class="card hidden" id="filesCard">
-    <div id="fPath" class="perm-path">（未打开）</div>
-    <div class="row" style="margin-top:8px">
-      <button id="fUp" class="ghost" disabled>上一级</button>
-      <select id="fRootSel"></select>
-      <button id="fClose" class="ghost">关闭</button>
-    </div>
-    <div id="fList" class="filelist"></div>
-    <div id="fView" class="hidden"></div>
-  </section>
-
-  <section class="card">
-    <div id="log"></div>
-    <div id="perms" class="hidden"></div>
-    <div class="composer">
-      <input id="text" placeholder="输入消息…" autocomplete="off" disabled />
-      <button id="send" disabled>发送</button>
-    </div>
-  </section>
-</main>
 <script type="module" src="/app.js"></script>
+</body>
 </html>
