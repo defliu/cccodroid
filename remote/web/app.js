@@ -20,20 +20,36 @@ import {
 } from "/protocol.mjs";
 
 const $ = (id) => document.getElementById(id);
+// 页面照主 APP 的壳：顶栏 + 消息区 + 输入区，抽屉放会话和设置，设置 / 文件是整页。
 const ui = {
+  menu: $("btn-menu"),
+  drawer: $("drawer"),
+  closeDrawer: $("btn-close-drawer"),
+  sideNew: $("side-new"),
+  sideRecent: $("side-recent"),
+  navFiles: $("nav-files"),
+  navSettings: $("nav-settings"),
+  sideAcct: $("side-acct"),
+  acctSub: $("acct-sub"),
+  settingsBtn: $("btn-settings"),
   room: $("room"),
   code: $("code"),
   connect: $("connect"),
   disconnect: $("disconnect"),
   dot: $("dot"),
   state: $("state"),
-  session: $("session"),
+  setDot: $("set-dot"),
+  setState: $("set-state"),
+  setRelay: $("set-relay"),
+  setSess: $("set-sess"),
+  setRefresh: $("set-refresh"),
+  sessChip: $("sess-chip"),
+  statChip: $("stat-chip"),
+  pages: $("pages"),
   refresh: $("refresh"),
-  stop: $("stop"),
-  log: $("log"),
+  log: $("chat"),
   perms: $("perms"),
   files: $("files"),
-  filesCard: $("filesCard"),
   fPath: $("fPath"),
   fUp: $("fUp"),
   fClose: $("fClose"),
@@ -65,6 +81,7 @@ const state = {
   retry: null,
   retryDelay: 2000,
   sessions: [],
+  sessionId: "",    // 抽屉里选中的会话；"" = 新对话（不过滤）
   watch: undefined, // 已下发的会话筛选（null = 不过滤）；undefined = 这条连接还没下发过，ready 后重下
   pending: [],      // 密钥还没算完就到达的 data 帧（hello 先到、ready 紧随其后），算完再解
   history: { sessionId: null, cursor: 0, busy: false, tip: null, slot: null },   // 当前渲染的是哪个会话的历史
@@ -74,13 +91,112 @@ const state = {
 
 function setStatus(text, kind) {
   ui.state.textContent = text;
+  ui.state.className = kind || "";
+  ui.setDot.className = "dot" + (kind ? " " + kind : "");
   ui.dot.className = "dot" + (kind ? " " + kind : "");
+  ui.setState.textContent = text;
+  ui.acctSub.textContent = text;
+  ui.statChip.textContent = kind === "ok" ? "已加密" : "";
+}
+
+// 消息照主 APP 的行：你的是右侧气泡，Claude 的直接铺在底色上，系统 / 工具行是浅色和小字。
+// 正文按主 APP 的轻量 Markdown 排版（标题 / 列表 / 代码块 / 表格 / 粗体 / 链接），先转义再加标签。
+const LINE_KIND = { me: "user", them: "bot", tool: "tool", think: "think", sys: "sys" };
+const MD_LINES = { me: true, them: true };
+
+const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function inlineMd(raw) {
+  const keep = [];
+  const hold = (h) => "\u0000" + (keep.push(h) - 1) + "\u0000";
+  let s = escHtml(String(raw).replace(/[\u0000\u0001]/g, ""));
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => hold("<code>" + c + "</code>"));
+  s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    (_, l, u) => hold('<a href="' + u + '" target="_blank" rel="noopener">' + l + "</a>"));
+  s = s.replace(/https?:\/\/[^\s<>"'`）)】，。；\u0000]+/g, (u) => {
+    const tail = (u.match(/[.,;:!?*]+$/) || [""])[0];
+    const h = u.slice(0, u.length - tail.length);
+    return hold('<a href="' + h + '" target="_blank" rel="noopener">' + h + "</a>") + tail;
+  });
+  s = s.replace(/\*\*\*([^*\n]+)\*\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, n) => keep[n]);
+}
+
+const codeBlock = (lang, buf) =>
+  '<div class="code-wrap">' + (lang ? '<div class="code-lang">' + escHtml(lang) + "</div>" : "")
+  + "<pre><code>" + escHtml(buf.join("\n")) + "</code></pre></div>";
+
+function renderMd(text) {
+  const lines = String(text).replace(/[\u0000\u0001]/g, "").split("\n");
+  let out = "", inCode = false, codeBuf = [], codeLang = "", list = null, tableRows = [];
+  const closeList = () => { if (list) { out += "</" + list + ">"; list = null; } };
+  const flushTable = () => {
+    if (!tableRows.length) return;
+    const cells = (r) => r.replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+    let html = '<div class="tbl-wrap"><table>';
+    tableRows.forEach((row, i) => {
+      if (i === 1 && /^\s*\|?[\s:|-]+\|?\s*$/.test(row)) return;   // 分隔行
+      const tag = i === 0 ? "th" : "td";
+      html += "<tr>" + cells(row).map((c) => "<" + tag + ">" + inlineMd(c) + "</" + tag + ">").join("") + "</tr>";
+    });
+    out += html + "</table></div>";
+    tableRows = [];
+  };
+  for (const raw of lines) {
+    const fence = (inCode ? /^\s*```\s*$/ : /^\s*```\s*([^\s`]*)(?:\s+.*)?$/).exec(raw);
+    if (fence) {
+      if (inCode) { out += codeBlock(codeLang, codeBuf); codeBuf = []; inCode = false; }
+      else { closeList(); flushTable(); inCode = true; codeLang = fence[1]; }
+      continue;
+    }
+    if (inCode) { codeBuf.push(raw); continue; }
+    if (/^\s*\|.*\|\s*$/.test(raw)) { closeList(); tableRows.push(raw.trim()); continue; }
+    flushTable();
+    const h = raw.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { closeList(); const lv = Math.min(h[1].length + 1, 4); out += "<h" + lv + ">" + inlineMd(h[2]) + "</h" + lv + ">"; continue; }
+    if (/^\s*([-*_])\s*\1\s*\1[\s-*_]*$/.test(raw)) { closeList(); out += "<hr>"; continue; }
+    const bq = raw.match(/^>\s?(.*)$/);
+    if (bq) { closeList(); out += "<blockquote>" + inlineMd(bq[1]) + "</blockquote>"; continue; }
+    const ul = raw.match(/^\s*[-*+]\s+(.*)$/);
+    if (ul) {
+      if (list !== "ul") { closeList(); out += "<ul>"; list = "ul"; }
+      out += "<li>" + inlineMd(ul[1]) + "</li>";
+      continue;
+    }
+    const ol = raw.match(/^\s*(\d+)[.)]\s+(.*)$/);
+    if (ol) {
+      if (list !== "ol") { closeList(); out += "<ol>"; list = "ol"; }
+      out += "<li>" + inlineMd(ol[2]) + "</li>";
+      continue;
+    }
+    if (!raw.trim()) { closeList(); continue; }
+    closeList();
+    out += "<p>" + inlineMd(raw) + "</p>";
+  }
+  if (inCode && codeBuf.length) out += codeBlock(codeLang, codeBuf);
+  flushTable(); closeList();
+  return out;
+}
+
+// 正文的原始文本留在 el._raw：流式时每来一段就按整段重排一次，不用回读 DOM。
+function setLineText(el, text, md) {
+  el._raw = text;
+  const b = el.firstElementChild;
+  if (md) b.innerHTML = renderMd(text);
+  else b.textContent = text;
 }
 
 function mkLine(text, cls = "sys") {
   const el = document.createElement("div");
-  el.className = "msg " + cls;
-  el.textContent = text;
+  el.className = "msg " + (LINE_KIND[cls] || "sys");
+  const b = document.createElement("div");
+  b.className = "bubble";
+  el.appendChild(b);
+  setLineText(el, text, !!MD_LINES[cls]);
   return el;
 }
 
@@ -94,10 +210,24 @@ function logLine(text, cls = "sys") {
 function setInputs(enabled) {
   ui.text.disabled = !enabled;
   ui.send.disabled = !enabled;
-  ui.stop.disabled = !enabled;
   ui.refresh.disabled = !enabled;
+  ui.setRefresh.disabled = !enabled;
   ui.files.disabled = !enabled;
-  if (!enabled) closeFiles();
+  ui.navFiles.disabled = !enabled;
+  if (!enabled) {
+    setBusy(false);
+    closeFiles();
+  }
+}
+
+function setBusy(on) {
+  ui.send.classList.toggle("busy", !!on);
+  ui.send.title = on ? "停止" : "发送";
+}
+
+function autoGrow() {
+  ui.text.style.height = "auto";
+  ui.text.style.height = Math.min(ui.text.scrollHeight, 180) + "px";
 }
 
 function parseHash() {
@@ -106,29 +236,72 @@ function parseHash() {
   if (p.get("code")) ui.code.value = p.get("code");
 }
 
-function renderSessions(list, keep = true) {
-  state.sessions = Array.isArray(list) ? list : [];
-  const prev = keep ? ui.session.value : "";
-  ui.session.innerHTML = "";
-  const optNew = document.createElement("option");
-  optNew.value = "";
-  optNew.textContent = "新会话";
-  ui.session.appendChild(optNew);
-  for (const s of state.sessions) {
-    const o = document.createElement("option");
-    o.value = s.id;
-    const when = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : "";
-    o.textContent = `${s.title || s.id.slice(0, 8)}${s.current ? " · 当前" : ""}${when ? " · " + when : ""}`;
-    ui.session.appendChild(o);
+function sessionLabel(sid) {
+  if (!sid) return "";
+  const s = state.sessions.find((x) => x.id === sid);
+  return s ? (s.title || s.id.slice(0, 8)) : sid;
+}
+
+function paintSessionChips() {
+  const label = sessionLabel(state.sessionId) || "新对话";
+  ui.sessChip.textContent = label;
+  ui.setSess.textContent = "会话：" + label;
+}
+
+// 抽屉下半截就是主 APP 的「最近的对话」：点一条就切过去，当前会话高亮。
+function renderDrawer() {
+  ui.sideRecent.innerHTML = "";
+  ui.sideRecent.appendChild(mkEl("h4", null, "最近的对话"));
+  if (!state.sessions.length) {
+    ui.sideRecent.appendChild(mkEl("div", "sr-empty", state.connected ? "还没有会话" : "连接后显示会话"));
+    return;
   }
-  // 「新会话」是用户明确的选择（watch = null）。列表刷新不能被「当前项目」的会话顶掉，
-  // 否则筛选会在用户没动下拉框的情况下自己变严。只有首次拿到列表（keep=false）才自动选一个。
-  if (prev && [...ui.session.options].some((o) => o.value === prev)) ui.session.value = prev;
-  else if (!keep) {
-    const cur = state.sessions.find((s) => s.current);
-    if (cur) ui.session.value = cur.id;
+  for (const s of state.sessions) {
+    const b = mkEl("button", "sr-item" + (s.id === state.sessionId ? " on" : ""));
+    b.type = "button";
+    b.appendChild(mkEl("span", null, s.title || s.id.slice(0, 8)));
+    b.addEventListener("click", () => { closeDrawer(); pickSession(s.id); });
+    ui.sideRecent.appendChild(b);
   }
 }
+
+function renderSessions(list, keep = true) {
+  state.sessions = Array.isArray(list) ? list : [];
+  // 列表刷新不能把用户明确选的「新对话」顶掉；只有首次拿到列表（keep=false）才自动选当前会话。
+  if (keep) {
+    if (state.sessionId && !state.sessions.some((s) => s.id === state.sessionId)) state.sessionId = "";
+  } else {
+    const cur = state.sessions.find((s) => s.current);
+    state.sessionId = cur ? cur.id : "";
+  }
+  renderDrawer();
+  paintSessionChips();
+}
+
+function pickSession(id) {
+  state.sessionId = id || "";
+  renderDrawer();
+  paintSessionChips();
+  showPage(null);
+  pushWatch(true);
+}
+
+// 整页（设置 / 文件）盖在消息区上面；null = 回到对话。
+function showPage(name) {
+  if (!name) {
+    ui.pages.classList.add("hidden");
+    ui.pages.dataset.page = "";
+    return;
+  }
+  ui.pages.classList.remove("hidden");
+  ui.pages.dataset.page = name;
+  for (const sec of ui.pages.querySelectorAll(".page")) {
+    sec.classList.toggle("hidden", sec.id !== "page-" + name);
+  }
+}
+
+function openDrawer() { ui.drawer.classList.remove("hidden"); }
+function closeDrawer() { ui.drawer.classList.add("hidden"); }
 
 // ── 历史回放（Phase 2 C）：进入会话先补最近一页，顶部按钮往前翻 ──────────
 let moreBtn = null;       // 「加载更早」，历史区最上面
@@ -155,8 +328,8 @@ function setHistorySession(sid) {
   moreBtn.textContent = "加载更早";
   moreBtn.addEventListener("click", () => requestHistory(false));
   ui.log.appendChild(moreBtn);
-  const opt = [...ui.session.options].find((o) => o.value === sid);
-  logLine(`会话历史：${opt ? opt.textContent : sid}`, "sys");
+  const label = sessionLabel(sid) || sid;
+  logLine(`会话历史：${label}`, "sys");
   state.history.tip = logLine("正在载入最近的消息…", "sys");
   state.history.slot = document.createComment("history");   // 历史都插在这个锚点前面
   ui.log.appendChild(state.history.slot);
@@ -460,19 +633,20 @@ function joinPath(base, name) {
 function closeFiles() {
   state.files.open = false;
   state.files.blob = null;
-  ui.filesCard.classList.add("hidden");
   if (state.files.url) { URL.revokeObjectURL(state.files.url); state.files.url = null; }
   ui.fView.classList.add("hidden");
   ui.fView.innerHTML = "";
+  if (ui.pages.dataset.page === "files") showPage(null);
 }
 
 function toggleFiles() {
-  if (state.files.open) return closeFiles();
-  state.files.open = true;
-  ui.filesCard.classList.remove("hidden");
-  ui.fView.classList.add("hidden");
-  ui.fView.innerHTML = "";
-  requestLs(null);
+  if (!state.files.open) {
+    state.files.open = true;
+    ui.fView.classList.add("hidden");
+    ui.fView.innerHTML = "";
+    requestLs(null);
+  }
+  showPage("files");
 }
 
 function requestLs(p) {
@@ -631,7 +805,7 @@ async function sendCmd(obj) {
 // 事件归属在网关侧解析（run_start/run_end 带会话号，中间事件靠 runId 映射），这里只管下发。
 // 换会话时顺带清屏并载入那一页历史，免得把上一个会话的流式内容混在一起。
 function pushWatch(force = false) {
-  const sid = ui.session.value || null;
+  const sid = state.sessionId || null;
   if (!force && sid === state.watch) return;
   const changed = sid !== state.watch;
   state.watch = sid;
@@ -707,6 +881,7 @@ async function connect(fresh = false) {
         ui.disconnect.disabled = false;
         ui.room.disabled = true;
         ui.code.disabled = true;
+        showPage(null);                // 连上就回到对话页
         logLine("通道已建立（端到端加密）", "sys");
         await drainPending();          // 先补上握手期间到达的 ready，再拉列表
         await sendCmd({ cmd: "list" });
@@ -802,9 +977,11 @@ function handlePayload(p) {
       handleBlob(p);
       break;
     case "queued":
+      setBusy(true);
       logLine(p.injected ? "已插入当前轮" : "已发送，等待执行", "sys");
       break;
     case "stopped":
+      setBusy(false);
       logLine(p.killed ? "已停止当前轮" : "没有正在跑的任务", "sys");
       break;
     case "state":
@@ -839,6 +1016,7 @@ function renderEvent(ev) {
   } else if (ev.type === "perm_resolved") {
     permDone(ev.id, ev.behavior, ev);
   } else if (ev.type === "run_end") {
+    setBusy(false);
     appendStream("\n— 本轮结束 —\n", "sys");
     sendCmd({ cmd: "list" });
   } else if (ev.type === "error") {
@@ -849,25 +1027,43 @@ function renderEvent(ev) {
 }
 
 let streamEl = null;
+let streamRaf = 0;
+const streamPending = new Map();   // 一帧内要重排的流式行（token 来得很快，不必每段都重排）
+
+function flushStream() {
+  streamRaf = 0;
+  for (const [el, cls] of streamPending) setLineText(el, el._raw || "", !!MD_LINES[cls]);
+  streamPending.clear();
+  ui.log.scrollTop = ui.log.scrollHeight;
+}
+
 function appendStream(text, cls) {
   if (!text) return;
   if (!streamEl || streamEl.dataset.cls !== cls) {
     streamEl = logLine("", cls);
     streamEl.dataset.cls = cls;
   }
-  streamEl.textContent += text;
-  ui.log.scrollTop = ui.log.scrollHeight;
+  streamEl._raw = (streamEl._raw || "") + text;
+  if (MD_LINES[cls]) {
+    streamPending.set(streamEl, cls);
+    if (!streamRaf) streamRaf = requestAnimationFrame(flushStream);
+  } else {
+    streamEl.firstElementChild.textContent = streamEl._raw;
+    ui.log.scrollTop = ui.log.scrollHeight;
+  }
 }
 
 async function send() {
   const text = ui.text.value.trim();
   if (!text || !state.connected) return;
-  const sessionId = ui.session.value || undefined;
+  const sessionId = state.sessionId || undefined;
   const ok = await sendCmd({ cmd: "send", text, sessionId, cid: `r-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` });
   if (!ok) return;          // 超长之类的发送失败：正文留在输入框里，别当成已发出
   logLine(text, "me");
   ui.text.value = "";
   streamEl = null;
+  autoGrow();
+  setBusy(true);            // 发送键换成停止键，run_end / stopped 再换回来
 }
 
 function disconnect() {
@@ -876,25 +1072,51 @@ function disconnect() {
   if (state.ws) state.ws.close();
 }
 
+// ── 壳的交互：顶栏、抽屉、整页、输入区 ────────────────────────────
+ui.menu.addEventListener("click", openDrawer);
+ui.settingsBtn.addEventListener("click", () => showPage("settings"));
+ui.closeDrawer.addEventListener("click", closeDrawer);
+ui.drawer.addEventListener("click", (e) => { if (e.target === ui.drawer) closeDrawer(); });
+ui.sideNew.addEventListener("click", () => { closeDrawer(); pickSession(""); });
+ui.navFiles.addEventListener("click", () => { closeDrawer(); toggleFiles(); });
+ui.navSettings.addEventListener("click", () => { closeDrawer(); showPage("settings"); });
+ui.sideAcct.addEventListener("click", () => { closeDrawer(); showPage("settings"); });
+ui.sessChip.addEventListener("click", openDrawer);
+for (const b of document.querySelectorAll("[data-back]")) {
+  b.addEventListener("click", () => {
+    if (ui.pages.dataset.page === "files") closeFiles();
+    else showPage(null);
+  });
+}
 ui.connect.addEventListener("click", () => { connect(true); });
 ui.disconnect.addEventListener("click", disconnect);
-ui.send.addEventListener("click", send);
-ui.stop.addEventListener("click", () => sendCmd({ cmd: "stop" }));
+ui.send.addEventListener("click", () => {
+  if (ui.send.classList.contains("busy")) {
+    sendCmd({ cmd: "stop" });
+    return;
+  }
+  send();
+});
 ui.refresh.addEventListener("click", () => sendCmd({ cmd: "list" }));
+ui.setRefresh.addEventListener("click", () => sendCmd({ cmd: "list" }));
 ui.files.addEventListener("click", toggleFiles);
 ui.fClose.addEventListener("click", closeFiles);
 ui.fUp.addEventListener("click", () => { if (state.files.parent) requestLs(state.files.parent); });
 ui.fRootSel.addEventListener("change", () => { if (ui.fRootSel.value) requestLs(ui.fRootSel.value); });
-ui.session.addEventListener("change", () => pushWatch(true));
 ui.text.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     send();
   }
 });
+ui.text.addEventListener("input", autoGrow);
 
 parseHash();
 setInputs(false);
 setStatus("未连接");
+renderDrawer();
+paintSessionChips();
+ui.setRelay.textContent = "中继：" + (RELAY_WS || location.host);
 // 配对链接（#room=…&code=…）打开即连：网关设置页给的链接就是拿来一键进入的
 if (ui.room.value.trim() && ui.code.value.trim()) connect(true);
+else showPage("settings");   // 没有配对信息就先停在设置页，让人粘贴链接 / 手填配对码
