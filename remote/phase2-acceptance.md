@@ -17,7 +17,7 @@
 | 前端 `f1` | ✅ 20/20 | 分段拼接后的 `gateway/web/app.js` 等 |
 | `language` / `langdict` | ✅ | 新增文案 9 种语言齐全（`i18n/scan.mjs --all` 显示 2985/2985） |
 
-合计 `remote` 34/34 通过（8 个套件）。
+合计 `remote` 34/34 通过（8 个套件）。这些套件从 2026-11-19 起由 `node scripts/test.mjs` 在 `gateway/tests` 之后一起跑，CI 的 apk 工作流会覆盖，不再只靠本地手跑。
 
 ## 二、mock 环境的浏览器验收（A：过滤）
 

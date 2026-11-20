@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-// 网关测试：node scripts/test.mjs [文件名片段 …]
+// 网关 + 远程控制测试：node scripts/test.mjs [文件名片段 …]
+//
+// 先跑 gateway/tests 再跑 remote/test（两边都按片段过滤）。CI 的 apk 工作流只调这个脚本，
+// 所以远程控制的新用例必须留在这里，不能只在开发机上手跑。
 //
 // 每次在一个新建的临时目录里跑：CCAPP_HOME / HOME / CCAPP_WORKSPACE 指过去，假 $PREFIX 里放系统 curl 链接与受控 toybox兼容 flock fixture，
 // CCAPP_TEST=1 让网关模块导入时不做任何启动动作（见 gw/config.mjs 的 LIVE）。所以在开发机上跑也碰不到真数据。
@@ -13,9 +16,16 @@ import { installRegistryFlock } from "../gateway/tests/fixtures/registry-flock.m
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TESTS = path.join(ROOT, "gateway", "tests");
+const REMOTE = path.join(ROOT, "remote", "test");
 const want = process.argv.slice(2);
-const files = fs.readdirSync(TESTS).filter((f) => f.endsWith(".test.mjs") && (!want.length || want.some((w) => f.includes(w)))).sort();
-if (!files.length) { console.error("没有匹配的测试文件"); process.exit(1); }
+const match = (f) => !want.length || want.some((w) => f.includes(w));
+const files = fs.readdirSync(TESTS).filter((f) => f.endsWith(".test.mjs") && match(f)).sort();
+// 远程控制测试（protocol / relay / filtering / history / perm / files…）跟网关测试一起跑：
+// CI 的 apk 工作流只调这个脚本，只放在开发机上手跑的话回归进不了门。
+const remoteFiles = fs.existsSync(REMOTE)
+  ? fs.readdirSync(REMOTE).filter((f) => f.endsWith(".test.mjs") && match(f)).sort()
+  : [];
+if (!files.length && !remoteFiles.length) { console.error("没有匹配的测试文件"); process.exit(1); }
 
 const curl = spawnSync("sh", ["-c", "command -v curl"], { encoding: "utf8" }).stdout.trim();
 if (!curl) { console.error("找不到 curl"); process.exit(1); }
@@ -52,12 +62,31 @@ const env = { ...clean, CCAPP_TEST: "1", CCAPP_HOME: home, HOME: home, CCAPP_WOR
 
 // 异步起：被 timeout / Ctrl-C / 关终端打断时也要删掉临时目录（以前用 spawnSync，信号一来整个进程直接没了，4 天攒下 29 个，D10）。
 // 收到信号先转给测试进程，等它退出再删；SIGKILL 接不住，留给存储的自动清理（$TMPDIR 里 7 天没动的）
-const child = spawn(process.execPath, ["--test", "--test-concurrency=1", ...files.map((f) => path.join(TESTS, f))], { env, stdio: "inherit", cwd: ROOT });
+const suites = [];
+if (files.length) suites.push({ name: "网关", dir: TESTS, files });
+if (remoteFiles.length) suites.push({ name: "远程控制", dir: REMOTE, files: remoteFiles });
+
 let stopped = null;
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { stopped = sig; try { child.kill(sig); } catch {} });
-child.on("exit", (code, signal) => {
+let current = null;
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => { stopped = sig; try { current?.kill(sig); } catch {} });
+
+function run(suite) {
+  return new Promise((resolve) => {
+    console.log(`\n── ${suite.name}测试（${suite.files.length} 个文件）──`);
+    const child = spawn(process.execPath, ["--test", "--test-concurrency=1", ...suite.files.map((f) => path.join(suite.dir, f))], { env, stdio: "inherit", cwd: ROOT });
+    current = child;
+    child.on("exit", (code, signal) => { current = null; resolve(code ?? (signal ? 130 : 1)); });
+  });
+}
+
+(async () => {
+  let code = 0;
+  for (const suite of suites) {
+    code = await run(suite);
+    if (code) break;
+  }
   if (!process.env.KEEP_TEST_TMP) fs.rmSync(tmp, { recursive: true, force: true });
   else console.log("临时目录留着：" + tmp);
   if (stopped) console.error(`测试被 ${stopped} 打断，临时目录已${process.env.KEEP_TEST_TMP ? "留着" : "删掉"}`);
-  process.exit(code ?? (signal || stopped ? 130 : 1));
-});
+  process.exit(code || (stopped ? 130 : 0));
+})();

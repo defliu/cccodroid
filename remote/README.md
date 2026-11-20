@@ -48,7 +48,10 @@ Gateway side (not in this dir):
 # relay (port 3010, loopback)
 node remote/relay/server.mjs --port 3010 --host 127.0.0.1
 
-# tests
+# tests (gateway + remote control; the apk CI workflow runs this)
+node scripts/test.mjs
+
+# remote control only
 node --test remote/test/phase0.test.mjs remote/test/phase1.test.mjs remote/test/wsclient.test.mjs remote/test/relay-limits.test.mjs remote/test/filter.test.mjs remote/test/history.test.mjs remote/test/perm.test.mjs remote/test/files.test.mjs
 
 # mock gateway for the PWA (prints ROOM=… CODE=… each start)
