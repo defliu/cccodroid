@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  遥控端 APK 的清单（CLIENT=1 sh scripts/build.sh）：只做手机客户端，Claude Code 跑在电脑上。
+  和主 APK 的区别是刻意的——没有开发工具包安装器、没有手机端网关服务、没有 Shizuku /
+  无障碍 / 存储权限，也没有开机、闹钟这些保活组件。包名不同（cc.codroid.remote），
+  可以和主 APK 同时装在手机上。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="cc.codroid.remote"
+    android:versionCode="1"
+    android:versionName="0.1.0">
+
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="cccodroid remote"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:usesCleartextTraffic="true"
+        android:hardwareAccelerated="true"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+
+        <activity
+            android:name="cc.codroid.RemoteActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|screenLayout|smallestScreenSize|uiMode|density|fontScale|navigation"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
