@@ -1,8 +1,8 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { CFG, GLIBC_PRELOAD, NO_BRIDGE, PATHS, PREFIX, glibcEnv, log, sleep, tz } from "./config.mjs";
+import { spawn, spawnSync } from "node:child_process";
+import { CFG, GLIBC_PRELOAD, IS_WIN, NO_BRIDGE, PATHS, PREFIX, glibcEnv, log, sleep, tz } from "./config.mjs";
 import { SETTINGS, outputStyles } from "./settings-store.mjs";
 import { PROVIDER, keyOf } from "./providers.mjs";
 import { cachedModels, defaultCompactLine } from "./models.mjs";
@@ -42,13 +42,31 @@ export function guardHooks(app = APP) {
   const src = guardSource(app);
   if (!src) return null;
   const q = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+  // Windows 上钩子由 cmd.exe 解析：单引号不算引号，得用双引号（源码里没有双引号）
+  const qw = (x) => '"' + String(x).replace(/"/g, '\\"') + '"';
+  const score = IS_WIN ? qw : q;
   const matcher = "Bash|Read|Edit|Write|MultiEdit|NotebookEdit|Grep|Glob|mcp__device__.*";
   if (src === BAD) {
     // 核不过：这一层不能换成别的，也不能整层不挂。挂一个一律拦下的（PreToolUse 退出码 2 = 不许用），等空闲重启按安装包还原
     log("⚠️ [应用文件] guard / breach.mjs 和安装包对不上，敏感工具这一轮一律拦下");
     app?.restart("guard/cc-guard.mjs 或 gw/breach.mjs（和安装包对不上）");
     const deny = "process.stderr.write('cccodroid: the safety check could not be verified against the installed package; this tool is blocked until the app restores it.');process.exit(2)";
-    return [{ matcher, hooks: [{ type: "command", command: q(process.execPath) + " -e " + q(deny), timeout: 10 }] }];
+    return [{ matcher, hooks: [{ type: "command", command: score(process.execPath) + " -e " + score(deny), timeout: 10 }] }];
+  }
+  // Windows 命令行总长只有 32k（CreateProcess 上限），guard 源码约 50k 塞不进 -e；写成文件交给 node 跑。
+  // 代价：桌面端这一层要读盘上那份（移动端的 -e 方案保留，安装包内存校验照旧）
+  if (IS_WIN) {
+    const dir = path.join(CFG.home, ".cache", "ccapp-guard");
+    const file = path.join(dir, "cc-guard.mjs");
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, src, { mode: 0o600 });
+      return [{ matcher, hooks: [{ type: "command", command: score(process.execPath) + " " + score(file), timeout: 10 }] }];
+    } catch (e) {
+      log("⚠️ 写 guard 脚本失败，敏感工具这一轮一律拦下: " + e.message);
+      const deny = "process.stderr.write('cccodroid: the safety check could not be written; this tool is blocked.');process.exit(2)";
+      return [{ matcher, hooks: [{ type: "command", command: score(process.execPath) + " -e " + score(deny), timeout: 10 }] }];
+    }
   }
   return [{ matcher, hooks: [{ type: "command", command: q(process.execPath) + " --input-type=module -e " + q(src), timeout: 10 }] }];
 }
@@ -63,6 +81,16 @@ let SHELL_PATH = null;
 const SYS_SH = fs.existsSync("/system/bin/sh") ? "/system/bin/sh" : "/bin/sh";
 export function ensureShell() {
   if (SHELL_PATH) return SHELL_PATH;
+  // Windows（桌面端）：claude 认 Git Bash，直接把真 bash.exe 交给它；
+  // 包装脚本的 shebang 在 Windows 上用不了，也不存在安卓那种 mksh 别名问题。
+  if (IS_WIN) {
+    const cands = [process.env.CCAPP_SHELL,
+      path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "usr", "bin", "bash.exe"),
+      path.join(process.env.ProgramFiles || "C:\\Program Files", "Git", "bin", "bash.exe"),
+      path.join(process.env.LOCALAPPDATA || "", "Programs", "Git", "usr", "bin", "bash.exe")].filter(Boolean);
+    SHELL_PATH = cands.find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || "bash.exe";
+    return SHELL_PATH;
+  }
   // 开发端（旧布局）没有 CCAPP_SHELL：有 files/cbash/bash（glibc 版真 bash）就用它。
   // /system/bin/sh 是 mksh —— claude 的 shell 快照开头 unalias -a，会把 mksh 靠别名实现的 local 一起删掉，
   // 快照里的 grep/find/pkill 函数于是每次都报 "local: inaccessible or not found"。
@@ -228,22 +256,26 @@ export function claudeEnv(o = {}) {
   const env = {
     ...process.env,
     HOME: CFG.home,
+    // Windows 上的 Claude Code 认 USERPROFILE（os.homedir），不认 HOME：临时 home 测试时两边都要指过去
+    USERPROFILE: IS_WIN ? CFG.home : undefined,
     // 显式钉死临时目录。安卓上 /tmp 写不进（shell 属主 + SELinux），而工具链是从
     // Termux 搬来的，很多二进制里编译期写死了 /data/data/com.termux/files/usr/tmp
     // —— 那个目录在这台设备上根本不存在，回落过去就是一句 ENOENT。
     // 之前只靠从网关继承，网关怎么起的（MainActivity 还是 gw-swap.sh）就决定了有没有，
     // 太脆；这里自己钉死，claude 及其所有工具子进程就都有可写临时目录了。
     // cccodroid：用 $PREFIX/tmp —— 等长改写后，二进制里写死的默认临时目录正好就是它
-    TMPDIR: PREFIX ? (fs.mkdirSync(path.join(PREFIX, "tmp"), { recursive: true }), path.join(PREFIX, "tmp")) : CFG.home,
+    TMPDIR: IS_WIN ? (process.env.TEMP || process.env.TMP || CFG.home)
+      : PREFIX ? (fs.mkdirSync(path.join(PREFIX, "tmp"), { recursive: true }), path.join(PREFIX, "tmp")) : CFG.home,
     // 文件检查点：-p 模式默认不记，打开后每条用户消息前给 Edit/Write 要动的文件留底，「回退到这里」靠它（见 rewindFiles）
     CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: "1",
     // 同理：把 ncurses 的 terminal database 指到我们自己的 prefix。
     // 死引用原本指向不存在的 Termux share/terminfo，TUI 程序（hx、gdb -tui…）拿不到
     // 终端能力；我们 prefix 里那份是齐的（221K），指过去就活了。
-    TERMINFO_DIRS: PREFIX ? path.join(PREFIX, "share", "terminfo") : path.join(PATHS.toolchain, "dshtc", "prefix", "share", "terminfo"),
+    TERMINFO_DIRS: IS_WIN ? undefined : (PREFIX ? path.join(PREFIX, "share", "terminfo") : path.join(PATHS.toolchain, "dshtc", "prefix", "share", "terminfo")),
     // 工具链在前：这样 claude 调 git/gcc/rg/magick… 命中的是我们搬过来的包装脚本。
     // 最前面的 app/pre 放 pkg / apt 和 adb（服务改开私有套接字）：工具包里有同名的旧说明替身，改它会被完整性校验判成"改动"，只能靠 PATH 顺序压过去
-    PATH: PREFIX ? [process.env.CCAPP_BIN && path.join(process.env.CCAPP_BIN, "..", "pre"), path.join(PREFIX, "bin"), path.join(CFG.home, ".cccodroid", "bin"), process.env.CCAPP_BIN, "/system/bin", "/system/xbin"].filter(Boolean).join(":") : [
+    PATH: IS_WIN ? (process.env.PATH || "")
+      : PREFIX ? [process.env.CCAPP_BIN && path.join(process.env.CCAPP_BIN, "..", "pre"), path.join(PREFIX, "bin"), path.join(CFG.home, ".cccodroid", "bin"), process.env.CCAPP_BIN, "/system/bin", "/system/xbin"].filter(Boolean).join(":") : [
       path.join(PATHS.toolchain, "payload", "bin"),
       // 开发端自己加的工具（python3/pip、java/javac/d8/apksigner、strace、adb…）：放在 tc.tar 之外，启动重新部署时不会被冲掉
       path.join(CFG.runtime, "..", "devbin"),
@@ -254,14 +286,14 @@ export function claudeEnv(o = {}) {
     CCAPP_PROVIDER: p.id,
     // 标记：这棵进程树是网关拉起的 claude 运行（子孙都继承）。网关重启时据此认出上一任留下的孤儿，见 reapOrphans
     CCAPP_RUN: "1",
-    LD_LIBRARY_PATH: PREFIX ? "" : PATHS.nodeLib,   // 只给 node 用；glibc 走 --library-path
+    LD_LIBRARY_PATH: IS_WIN ? undefined : (PREFIX ? "" : PATHS.nodeLib),   // 只给 node 用；glibc 走 --library-path
     // 前缀布局下 glibc 的 resolv.conf 是齐的，不需要本地桥：直连厂商
     // 别家（会话钉的不是全局那家）也直连：桥只有一个上游，跟着全局走；claude（Bun）自己解析 DNS，用不着桥
     ANTHROPIC_BASE_URL: NO_BRIDGE || other ? (p.baseUrl || "") : `http://127.0.0.1:${CFG.bridgePort}`,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     // 自带的 ripgrep 按 /proc/self/exe 找，经加载器起的 claude 那是加载器本身：Grep / Glob 不报错、一律「没找到」（2.1.311 实测）。
     // 改用 PATH 里的 rg：工具包装了「命令行增强」用它的，没装落到 app/bin/rg（经加载器以 argv0=rg 调 claude 自带的那份）
-    USE_BUILTIN_RIPGREP: "0",
+    USE_BUILTIN_RIPGREP: IS_WIN ? undefined : "0",
     CLAUDE_CODE_SHELL: ensureShell(),
     SHELL: ensureShell(),
     CI: "1",
@@ -269,7 +301,7 @@ export function claudeEnv(o = {}) {
     NO_COLOR: "1",
   };
 
-  for (const k of ["LD_LIBRARY_PATH", "ANTHROPIC_BASE_URL"]) if (!env[k]) delete env[k];
+  for (const k of ["LD_LIBRARY_PATH", "ANTHROPIC_BASE_URL", "TERMINFO_DIRS", "USE_BUILTIN_RIPGREP", "USERPROFILE"]) if (!env[k]) delete env[k];
   // 发行版：claude 起来就设不可转储（预加载的 libccnodump.so 认这个变量，见 android/native/nodump.c），
   // 会话里跑的命令就不能 ptrace 它、改它的内存。终端（terminal.mjs）摘掉：那是机主自己的 claude
   if (sealed()) env.CCAPP_NODUMP = "1"; else delete env.CCAPP_NODUMP;
@@ -294,6 +326,14 @@ export function claudeEnv(o = {}) {
   if (key) {
     delete env.ANTHROPIC_AUTH_TOKEN;
     delete env.ANTHROPIC_API_KEY;
+    // Windows：claude.exe 2.1.326 在非 --bare 模式下根本不执行 --settings 里的 apiKeyHelper
+    // （实测：脚本一次都没跑，直接报 Not logged in；--bare 下同一个脚本正常），也没有别的不用环境的通道。
+    // 桌面端只能退回环境变量：这是机主自己的机器、自己的 key，泄漏面（Bash 子进程 env 出来）可接受；
+    // 移动端照旧走 apiKeyHelper，不发进环境。
+    if (IS_WIN) {
+      if (p.authStyle === "x-api-key") env.ANTHROPIC_API_KEY = key;
+      else env.ANTHROPIC_AUTH_TOKEN = key;
+    }
   } else if (p.login) {
     // 登录态直连官方：令牌不许经过我们的本地桥（条款：不得中转会话令牌）。
     // 桥本来只为 glibc 的 DNS 存在，claude（Bun）自己解析，用不着它。
@@ -385,8 +425,9 @@ const EXTRA_ENV_DENY = /^(ANTHROPIC_(BASE_URL|API_KEY|AUTH_TOKEN|MODEL|SMALL_FAS
 // CLASSPATH 起是 v0.5.12 独立审查 低3 补的：Java 类路径与选项、TeX 系的输入路径、Guile / Emacs / PHP / OCaml / Erlang 的加载路径
 // VIMINIT 起是 v0.5.14 独立审查 低-7 补的：vim 启动命令、终端能力库、字体与图形库模块、各工具的配置文件位置
 
-/** claude 是 glibc 程序，必须经 loader 启动 */
+/** claude 是 glibc 程序，必须经 loader 启动（Windows 上直接是官方 claude.exe，没有加载器） */
 export function claudeArgv(extra) {
+  if (IS_WIN) return [...extra];
   const pre = GLIBC_PRELOAD ? ["--preload", GLIBC_PRELOAD] : [];
   return ["--library-path", PATHS.claudeLib, ...pre, PATHS.claude, ...extra];
 }
@@ -405,6 +446,7 @@ export function enosysRun() {
 export function claudeCmd(extra) {
   // 发行版：开会话的一律加封口（--setting-sources "" 等，见 edition.mjs）。所有起 claude 的地方都经这里，别处不许自己拼
   const argv = claudeArgv(sealArgv(extra));
+  if (IS_WIN) return [PATHS.claude, argv];      // Windows 桌面端：直接起 claude.exe，没有加载器与 seccomp 监督器
   const er = SETTINGS.staticCompat !== false ? enosysRun() : "";
   return er ? [er, ["-f", PATHS.claudeLoader, ...argv]] : [PATHS.claudeLoader, argv];
 }
@@ -428,6 +470,12 @@ export function claudeAtLeast(v) {
 
 export function killTree(child) {
   if (!child || !child.pid) return;
+  // Windows：没有进程组信号，用 taskkill /T 顺着父子关系带走整棵树，再补一刀 child.kill
+  if (IS_WIN) {
+    try { spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }); }
+    catch { try { child.kill("SIGKILL"); } catch {} }
+    return;
+  }
   // 光杀组不够：claude 的 Bash 工具会给子 shell 另开进程组（setsid），实测中断后
   // `sh -c … sleep 60` 留下来被 init 收养。所以先顺着 /proc 的父子关系把整棵树
   // 摘出来（得在杀之前摘，杀完父子关系就断了），再逐个连组带进程一起杀。

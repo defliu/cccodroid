@@ -12,3 +12,5 @@ android/nativelib/
 android/assets/gwpin.json
 # 本机中继运维产物：frpc 证书/私钥、日志，绝不入库
 /tools/
+# 网关/中继在本机跑出来的运行目录
+/runtime/

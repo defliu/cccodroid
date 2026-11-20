@@ -44,6 +44,13 @@ const ui = {
   send: $("send"),
 };
 
+// Android 遥控端壳把这一页打进 APK，从它自己的回环地址加载，用 ?relay= 交出中继地址；
+// 浏览器里打开时没有这个参数，仍按页面自己的地址连（中继直接把这一页发出来）。
+const RELAY_WS = (() => {
+  const v = new URLSearchParams(location.search).get("relay");
+  return v && /^wss?:\/\//.test(v) ? v : null;
+})();
+
 const state = {
   ws: null,
   room: "",
@@ -663,7 +670,7 @@ async function connect(fresh = false) {
   location.hash = `room=${encodeURIComponent(state.room)}&code=${encodeURIComponent(state.code)}`;
 
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${location.host}/ws`);
+  const ws = new WebSocket(RELAY_WS || `${proto}//${location.host}/ws`);
   state.ws = ws;
 
   ws.onopen = () => {

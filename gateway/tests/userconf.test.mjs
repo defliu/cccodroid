@@ -407,6 +407,18 @@ test("卡片之后改了又改回同一版：常驻监视看见了，也不认",
   assert.deepEqual(ucKeep(p.rels, p.ticket), [".claude/CLAUDE.md"]);
 });
 
+test("卡片之后监视器只是补看到同一版（第一次核对时目录大、它还在追）：不算又改了，点「保留」照常认下", async () => {
+  fresh();
+  const s = JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "node /x/h.mjs" }] }] } });
+  put(".claude/settings.json", s);
+  const p = ucPending();
+  assert.ok(p && p.rels.includes(".claude/settings.json"));
+  await new Promise((r) => setTimeout(r, 20));
+  put(".claude/settings.json", s); _ucFlush();   // 内容没变，监视器又报了一次
+  assert.deepEqual(ucKeep(p.rels, p.ticket), []);
+  assert.equal(ucPending(), null);
+});
+
 test("发行版只问回填进来的 MCP 与权限：CLAUDE.md、skill 改了不问；.claude.json 加 MCP、settings 加 allow 要问，起进程紧前也只核这两份（199-11-06）", () => {
   fresh();
   put(".claude.json", JSON.stringify({ mcpServers: { a: { command: "node", args: ["a.js"] } } }));

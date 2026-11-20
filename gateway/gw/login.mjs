@@ -3,7 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { CFG, PATHS, log, tz } from "./config.mjs";
 import { isLoginMode, noteLoggedIn } from "./models.mjs";
-import { claudeArgv, claudeBlocked, claudeEnv, killTree } from "./claude.mjs";
+import { claudeBlocked, claudeCmd, claudeEnv, killTree } from "./claude.mjs";
 import { RUNS } from "./runs.mjs";
 import { providerById } from "./providers.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
@@ -39,9 +39,12 @@ async function loginStart(flag) {
   const urlFile = path.join(LOGIN_DIR, "url");
   const browser = path.join(LOGIN_DIR, "browser.sh");
   try { fs.unlinkSync(urlFile); } catch {}
-  fs.writeFileSync(browser, '#!/system/bin/sh\nprintf "%s\\n" "$1" > "' + urlFile + '"\n', { mode: 0o700 });
-  const env = { ...authEnv(), BROWSER: browser };
-  const child = spawn(PATHS.claudeLoader, claudeArgv(["auth", "login", flag]), { cwd: CFG.home, env, stdio: ["ignore", "pipe", "pipe"] });
+  // Windows 桌面端：让 claude 自己开系统浏览器（没有 /system/bin/sh，写不了 BROWSER 包装）
+  const win = process.platform === "win32";
+  if (!win) fs.writeFileSync(browser, '#!/system/bin/sh\nprintf "%s\\n" "$1" > "' + urlFile + '"\n', { mode: 0o700 });
+  const env = { ...authEnv(), ...(win ? {} : { BROWSER: browser }) };
+  const [cmd0, args0] = claudeCmd(["auth", "login", flag]);
+  const child = spawn(cmd0, args0, { cwd: CFG.home, env, stdio: ["ignore", "pipe", "pipe"] });
   const L = LOGIN = { child, out: "", startedAt: Date.now(), done: false, ok: false, flag, urlFile };
   // 登录不完成不能永久挂：设备码流程最多 15 分钟，到点收掉子进程并把状态结掉（0.6.9 审计 195-R.9）
   const expire = setTimeout(() => {
@@ -93,7 +96,8 @@ async function runAuth(args, timeoutMs = 20000) {
   const blocked = await claudeBlocked();
   if (blocked) return { code: -1, out: blocked };
   return new Promise((resolve) => {
-    const child = spawn(PATHS.claudeLoader, claudeArgv(["auth", ...args]), { cwd: CFG.home, env: authEnv(), stdio: ["ignore", "pipe", "pipe"] });
+    const [cmd0, args0] = claudeCmd(["auth", ...args]);
+    const child = spawn(cmd0, args0, { cwd: CFG.home, env: authEnv(), stdio: ["ignore", "pipe", "pipe"] });
     let out = "", stdout = "";
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");   // 按流解码：多字节字符跨块不会被拆坏
     child.stdout.on("data", (d) => { out += d; stdout += d; }); child.stderr.on("data", (d) => (out += d));

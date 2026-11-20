@@ -50,6 +50,60 @@ OUT=$ROOT/dist
 [ -z "$KS" ] || [ "$SIGN" = apksigner ] || { echo "✗ KS 要配 SIGN=apksigner 用（默认的签名库只认 KEY 钥匙 JSON）"; exit 1; }
 [ -n "$KS" ] || [ -f "$KEY" ] || { echo "✗ 找不到签名钥匙 $KEY（不会自动生成：换钥匙会让已装用户无法升级）"; exit 1; }
 
+# ── 遥控端（CLIENT=1）：只出手机客户端，不碰工具包 / 原生库 ──────────────
+# 手机只做遥控，Claude Code 跑在电脑上。页面用打进 APK 的 remote/web，从应用自己的
+# 回环地址加载；中继地址由配对链接给出（见 android/java/cc/codroid/RemoteLink.java）。
+if [ -n "$CLIENT" ]; then
+  echo "▸ 遥控端：页面"
+  rm -rf "$A/build"; mkdir -p "$A/build/classes" "$OUT"
+  CA="$A/build/client-assets"
+  mkdir -p "$CA/remote"
+  cp "$ROOT/remote/web/index.html" "$CA/remote/index.html"
+  cp "$ROOT/remote/web/app.js" "$CA/remote/app.js"
+  # PWA 里 import 的是 /protocol.mjs；中继那边直接发这份规范实现，这里也照做
+  cp "$ROOT/gateway/gw/remote-protocol.mjs" "$CA/remote/protocol.mjs"
+
+  echo "▸ javac（遥控端）"
+  $JAVAC -encoding UTF-8 --release 8 -nowarn -cp "$AJAR" -d "$A/build/classes" \
+    "$A/java/cc/codroid/RemoteActivity.java" \
+    "$A/java/cc/codroid/RemoteServer.java" \
+    "$A/java/cc/codroid/RemoteLink.java"
+
+  echo "▸ d8（遥控端）"
+  $D8 --release --min-api 26 --lib "$AJAR" --output "$A/build" \
+    $(find "$A/build/classes" -name '*.class')
+
+  echo "▸ aapt2 + 签名（遥控端）"
+  $AAPT2 compile --dir "$A/res" -o "$A/build/res.zip"
+  $AAPT2 link -o "$A/build/unsigned.apk" -I "$AJAR" \
+    --manifest "$A/AndroidManifest.remote.xml" -A "$CA" "$A/build/res.zip"
+  if [ "$SIGN" = apksigner ]; then
+    ( cd "$A/build" && zip -q unsigned.apk classes.dex )
+    ${ZIPALIGN:-zipalign} -p -f 4 "$A/build/unsigned.apk" "$A/build/aligned.apk"
+    if [ -n "$KS" ]; then
+      ${APKSIGNER:-apksigner} sign --ks "$KS" --ks-pass "pass:${KS_PASS:-android}" \
+        --out "$OUT/cccodroid-remote.apk" "$A/build/aligned.apk"
+    else
+      trap 'rm -f "$A/build/key.pk8" "$A/build/cert.pem"' EXIT
+      node -e 'const fs=require("fs"),c=require("crypto"),j=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+        fs.writeFileSync(process.argv[2],c.createPrivateKey(j.key).export({type:"pkcs8",format:"der"}),{mode:0o600});
+        fs.writeFileSync(process.argv[3],j.cert)' "$KEY" "$A/build/key.pk8" "$A/build/cert.pem"
+      ${APKSIGNER:-apksigner} sign --key "$A/build/key.pk8" --cert "$A/build/cert.pem" \
+        --out "$OUT/cccodroid-remote.apk" "$A/build/aligned.apk"
+    fi
+    rm -f "$OUT/cccodroid-remote.apk.idsig"
+  else
+    node --input-type=module -e "
+import fs from 'node:fs'; import { signApk } from '$ROOT/scripts/apklib.mjs';
+const r = signApk('$A/build/unsigned.apk', '$OUT/cccodroid-remote.apk',
+  [{ name: 'classes.dex', data: fs.readFileSync('$A/build/classes.dex'), method: 8 }], '$KEY');
+console.log('  ' + r.entries + ' 个条目 · ' + (r.size / 1048576).toFixed(2) + ' MB');
+"
+  fi
+  echo "✓ $OUT/cccodroid-remote.apk"
+  exit 0
+fi
+
 echo "▸ assets"
 rm -rf "$A/assets/app"; mkdir -p "$A/assets/app/web" "$A/assets/app/scripts" "$A/assets/app/bin"
 cp "$SRC/server.mjs" "$A/assets/app/"

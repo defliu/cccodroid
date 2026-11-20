@@ -549,13 +549,21 @@ export async function startRun(item) {
   catch (e) { emit({ type: "error", message: tr(LAST_LANG, tz("系统提示没写成文件，这一轮没有启动：{msg}", { msg: e.message })) }); return endRun(run, { failed: true }); }
   const [cmd0, args0] = claudeCmd(argv);
   // 外面套着 seccomp 监督器时，claude 是监督器的子进程：监督器把它的 pid 从 fd 3 报上来（不可转储的 claude 在 /proc 里看不见，作证要用，见 privWitness）
-  const wrapped = cmd0 !== PATHS.claudeLoader;
+  // Windows 桌面端直接起 claude.exe，既没有监督器也没有 fd 3
+  const wrapped = process.platform !== "win32" && cmd0 !== PATHS.claudeLoader;
+  // CCAPP_RUN_ID / CCAPP_GW_PORT：建档命令 cc-archive 靠它们告诉网关「这是哪一轮」；CCAPP_GW_PID 给 leftover.mjs 认是不是本网关起的
+  const runEnv = { ...claudeEnv({ model, provider: P }), CCAPP_RUN_ID: String(run.id), CCAPP_GW_PORT: String(CFG.port), CCAPP_GW_PID: String(process.pid), ...((run.privTok = privToken(run)) ? { CCAPP_PRIV_SESS: run.privTok } : {}), ...(wrapped ? { ENOSYS_RUN_PIDFD: "3" } : {}) };
+  if (process.platform === "win32" && process.env.CCAPP_DEBUG_SPAWN) {
+    const sum = (xs) => xs.reduce((a, s) => a + String(s).length + 3, 0);
+    const longest = args0.map((s) => [String(s).length, String(s).slice(0, 40)]).sort((a, b) => b[0] - a[0]).slice(0, 3);
+    log(`[spawn调试] 命令行约 ${sum(args0) + cmd0.length} 字；环境 ${Object.entries(runEnv).reduce((a, [k, v]) => a + k.length + String(v).length + 2, 0)} 字；最长参数 ${JSON.stringify(longest)}`);
+  }
   const child = spawn(cmd0, args0, {
     cwd,
-    // CCAPP_RUN_ID / CCAPP_GW_PORT：建档命令 cc-archive 靠它们告诉网关「这是哪一轮」；CCAPP_GW_PID 给 leftover.mjs 认是不是本网关起的
-    env: { ...claudeEnv({ model, provider: P }), CCAPP_RUN_ID: String(run.id), CCAPP_GW_PORT: String(CFG.port), CCAPP_GW_PID: String(process.pid), ...((run.privTok = privToken(run)) ? { CCAPP_PRIV_SESS: run.privTok } : {}), ...(wrapped ? { ENOSYS_RUN_PIDFD: "3" } : {}) },
+    env: runEnv,
     stdio: wrapped ? ["pipe", "pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
     detached: true,            // 当进程组长，中断时好整组带走（见 killTree）
+    windowsHide: true,         // Windows：detached 别弹新控制台窗口
   });
   run.child = child; run.preSpawn = false;
   // 首字前分段（F6）：准备（起进程前那些等待）→ 启动并连工具（到 claude 的 init）→ 等端口（到第一条 message_start）
@@ -843,6 +851,7 @@ export async function startRun(item) {
     }
     if (rk) { seenResults.add(rk); if (seenResults.size > 200) seenResults.delete(seenResults.keys().next().value); }
     lastResult = r; resultStale = false;
+    if (process.env.CCAPP_DEBUG_SPAWN) log(`[spawn调试] result is_error=${!!r.is_error} subtype=${r.subtype || ""} 文字=${String(r.result || "").slice(0, 200)}${stderr ? " :: stderr " + stderr.trim().slice(-300) : ""}`);
     // 这一轮走到了结果（答完或报错）：不再是「没跑完」（FIND-040）
     clearIncomplete(run.sessionId);
     if (run.intrPending && !r.is_error) { run.intrPending = false; clearInterrupted(run.sessionId); }

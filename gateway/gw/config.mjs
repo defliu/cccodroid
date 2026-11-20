@@ -3,6 +3,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
+// Windows（桌面端跑网关）：其余代码按 POSIX 写，只有 uid/gid 在 Windows 上没有。
+// 好几个模块在顶层就取（usage.mjs 的 MY_UID、sessionops 的临时目录名），补成固定值，导入即抛的问题就没了。
+export const IS_WIN = process.platform === "win32";
+if (IS_WIN) {
+  if (typeof process.getuid !== "function") process.getuid = () => 0;
+  if (typeof process.getgid !== "function") process.getgid = () => 0;
+}
+
 // 测试绕过 scripts/test.mjs 直接跑（node --test / node xx.test.mjs）时环境里是真 home：
 // 一导入网关模块就会读写真的会话、运行标记、定时任务。没有 CCAPP_TEST 一律不让起（#49 P2-18）
 if ((process.env.NODE_TEST_CONTEXT || /\.test\.mjs$/.test(process.argv[1] || "")) && process.env.CCAPP_TEST !== "1")
