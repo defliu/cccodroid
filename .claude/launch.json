@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "cccodroid-remote-pwa",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["remote/relay/server.mjs", "--port", "3012"],
+      "port": 3012
+    }
+  ]
+}

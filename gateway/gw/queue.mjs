@@ -583,6 +583,30 @@ function idemPrune() {
   while (IDEM.size > IDEM_MAX) IDEM.delete(IDEM.keys().next().value);
 }
 
+// ── /api/chat 与远程桥接共用的入参校验 ──────────────────────────────────
+// 以前这些检查只写在 HTTP 路由里，远程桥接直接调 enqueue，等于绕过了接口 / Key / 队列长度 / 长度上限。
+// 抽出来两边共用：通过返回 null，否则 { status, body }（body 就是 /api/chat 原本回的那份）。
+export function precheckChat(b) {
+  // 看这条消息要用的那家（新会话首条选的 / 会话钉的 / 全局的），不是只看全局
+  const q0 = { sessionId: b.sessionId ? String(b.sessionId) : null, follow: b.follow || null, projectId: b.projectId ? String(b.projectId) : null,
+    pin: !b.sessionId && b.pin && typeof b.pin.provider === "string" ? { provider: b.pin.provider } : null };
+  const pk = pickProvider(q0), bp = pk.P;
+  // 要用的那家不在了（写错、删了）：当场拒，不悄悄换成全局默认那家发出去（起跑时 startRun 还会再挡一次）
+  const lost = lostProvider(q0, pk.sid0, pk.pdef0);
+  if (lost) return { status: 409, body: { error: "provider_gone", message: lost } };
+  if (!keyOf(bp) && !bp.login && !/^\/(model|models|effort|autocompact)\b/i.test(String(b.message).trim())) {
+    return { status: 503, body: {
+      error: "no_api_key",
+      message: tz("「{name}」还没填 Key。到 设置 → 接口 里填好保存，或换一个接口。", { name: bp.label || bp.id }),
+    } };
+  }
+  if (QUEUE.length >= 50) return { status: 429, body: { error: "queue_full", message: tz("排队的消息太多了。") } };
+  // 字段都有上限（审查 v0513b 低-3）：排队 50 条 × 不限长的正文能把内存吃满；会话号这类直接进 claude 的参数
+  if (String(b.message).length > MSG_MAX) return { status: 413, body: { error: "too_long", message: tz("这条消息太长了（超过 200 万字），改成文件发吧。") } };
+  for (const k of ["sessionId", "follow"]) if (b[k] != null && b[k] !== "" && !SID_OK.test(String(b[k]))) return { status: 400, body: { error: "bad " + k } };
+  return null;
+}
+
 // ── 路由：/api/chat /api/interrupted/dismiss /api/queue/ ──
 export async function routeQueue(req, res, u, p) {
   if (req.method === "POST" && p === "/api/chat") {
@@ -600,23 +624,8 @@ export async function routeQueue(req, res, u, p) {
         return sendJson(res, 200, { ...prev.res, duplicate: true });
       }
     }
-    // 看这条消息要用的那家（新会话首条选的 / 会话钉的 / 全局的），不是只看全局
-    const q0 = { sessionId: b.sessionId ? String(b.sessionId) : null, follow: b.follow || null, projectId: b.projectId ? String(b.projectId) : null,
-      pin: !b.sessionId && b.pin && typeof b.pin.provider === "string" ? { provider: b.pin.provider } : null };
-    const pk = pickProvider(q0), bp = pk.P;
-    // 要用的那家不在了（写错、删了）：当场拒，不悄悄换成全局默认那家发出去（起跑时 startRun 还会再挡一次）
-    const lost = lostProvider(q0, pk.sid0, pk.pdef0);
-    if (lost) return sendJson(res, 409, { error: "provider_gone", message: lost });
-    if (!keyOf(bp) && !bp.login && !/^\/(model|models|effort|autocompact)\b/i.test(String(b.message).trim())) {
-      return sendJson(res, 503, {
-        error: "no_api_key",
-        message: tz("「{name}」还没填 Key。到 设置 → 接口 里填好保存，或换一个接口。", { name: bp.label || bp.id }),
-      });
-    }
-    if (QUEUE.length >= 50) return sendJson(res, 429, { error: "queue_full", message: tz("排队的消息太多了。") });
-    // 字段都有上限（审查 v0513b 低-3）：排队 50 条 × 不限长的正文能把内存吃满；会话号这类直接进 claude 的参数
-    if (String(b.message).length > MSG_MAX) return sendJson(res, 413, { error: "too_long", message: tz("这条消息太长了（超过 200 万字），改成文件发吧。") });
-    for (const k of ["sessionId", "follow"]) if (b[k] != null && b[k] !== "" && !SID_OK.test(String(b[k]))) return sendJson(res, 400, { error: "bad " + k });
+    const bad = precheckChat(b);
+    if (bad) return sendJson(res, bad.status, bad.body);
     const item = enqueue({ ...b, internal: false, auto: undefined });   // auto（空闲压缩轮）也只许网关自己设（审查 10-30 第九份 后端低8）
     const out = { ok: true, id: item.id, injected: !!item.injected, started: RUNS.has(item.id) };
     if (idem) { idemPrune(); IDEM.set(idem, { at: Date.now(), hash: idemHash(message), res: out }); }
